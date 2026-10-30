@@ -33,11 +33,28 @@ const input = createInput({
   onRespawn: () => (mode === 'solo' ? local && local.sim.respawn() : mode === 'online' && net.send({ t: 'respawn' })),
   onRestart: () => mode === 'solo' && startSolo(soloLevel),
   onToggleHelp: () => mode !== 'menu' && $('help').classList.toggle('hidden'),
-  onToggleMute: () => mode !== 'menu' && hud.showMessage(audio.toggleMute() ? 'Muted' : 'Sound on', '', 800),
+  onToggleMute: () => toggleMute(),
   screenToWorld: (x, y) => view.screenToWorld(x, y),
 });
 
 const touchControls = isTouch ? createTouchControls(input) : null;
+
+// mute button (top-left) and the M key do the same thing
+function showMuteState() {
+  const muted = audio.isMuted();
+  $('mute').textContent = muted ? '🔇' : '🔊';
+  $('mute').setAttribute('aria-pressed', String(muted));
+  $('mute').setAttribute('aria-label', muted ? 'Sound is off. Turn sound on' : 'Mute all sounds');
+}
+function toggleMute() {
+  audio.toggleMute();
+  showMuteState();
+}
+$('mute').onclick = (e) => {
+  toggleMute();
+  e.currentTarget.blur(); // or Space would press this button instead of farting
+};
+showMuteState();
 
 function setBodyClass(prefix, value) {
   for (const c of [...document.body.classList]) if (c.startsWith(prefix)) document.body.classList.remove(c);

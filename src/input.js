@@ -5,7 +5,7 @@
 // to steer, F to go). Gamepad N controls player N.
 // Online (setSeat(n)): you only drive seat n, and every fart key / click / pad farts it.
 
-import { FACE_CENTER, NUM_PLAYERS } from './sim/sim.js';
+import { ALL_SEATS, FACE_CENTER, NUM_PLAYERS, arcFor, walkToward } from './sim/sim.js';
 
 const AIM_SPEED = 3.2; // rad/s while holding Q/E
 const FART_KEYS = ['KeyZ', 'KeyX', 'KeyC', 'KeyV'];
@@ -24,7 +24,7 @@ export function createInput({ onRespawn, onRestart, onToggleHelp, onToggleMute, 
     seat: null, // online: the only seat this browser controls
     touch: null, // phones: { move, fart } from the on-screen controls (see touch.js)
   };
-  const walkLock = Array(NUM_PLAYERS).fill(null); // per player: rim direction chosen when walking began
+  const walkMem = Array.from({ length: NUM_PLAYERS }, () => ({ side: 0, to: null }));
   const typing = (e) => e.target && /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(e.target.tagName);
 
   addEventListener('keydown', (e) => {
@@ -64,7 +64,7 @@ export function createInput({ onRespawn, onRestart, onToggleHelp, onToggleMute, 
   // world direction -> that player's aim (turn away from facing the centre)
   const aimFor = (worldAngle, raft, player) => worldAngle - raft.angle - (player.pos + Math.PI);
 
-  function getCommands(dt, { raft, players }) {
+  function getCommands(dt, { raft, players, crew = ALL_SEATS }) {
     const online = state.seat !== null;
     if (online) state.active = state.seat;
     const a = state.active;
@@ -126,22 +126,10 @@ export function createInput({ onRespawn, onRestart, onToggleHelp, onToggleMute, 
       if (held(5)) move[i] = -1;
     }
 
-    // Left / right mean left / right on screen. Walking counter-clockwise (+1) moves you left
-    // on the top half of the raft but right on the bottom half, so the rim direction depends
-    // on where you stand. It's decided when you start walking and kept while you hold it, so
-    // you carry on smoothly round the side instead of bouncing back at it.
+    // left / right are always left / right on screen, however the raft has turned
     for (let i = 0; i < NUM_PLAYERS; i++) {
-      const h = screenWalk[i];
-      if (!h) {
-        walkLock[i] = null;
-        continue;
-      }
-      if (!walkLock[i] || walkLock[i].h !== h) {
-        const world = players[i].pos + raft.angle; // where you stand, in world angle
-        const ccwGoesLeft = Math.sin(world) > -0.05; // top half (and the very sides)
-        walkLock[i] = { h, dir: ccwGoesLeft ? -h : h };
-      }
-      move[i] = walkLock[i].dir * Math.min(1, Math.abs(h));
+      const m = walkToward(screenWalk[i], players[i].pos, raft.angle, arcFor(i, crew), walkMem[i]);
+      if (screenWalk[i]) move[i] = m;
     }
 
     for (let i = 0; i < NUM_PLAYERS; i++) state.aims[i] = wrap(state.aims[i]);

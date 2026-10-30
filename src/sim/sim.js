@@ -59,6 +59,39 @@ export function cleanCrew(crew) {
   return c.length ? c : [0];
 }
 
+// Left / right mean left / right on screen, whatever angle the raft is at: this steps round
+// the rim in whichever direction moves you towards that side of the screen right now, and stops
+// when you're as far that way as you can go (or at the end of your slice). h: -1 (left) .. 1
+// (right). The camera never rotates, so world +x is always screen right.
+// `mem` (optional, one object per player, kept while the key is held) covers the awkward case:
+// parked at one end of your slice with the other end further that way. Otherwise the key would
+// do nothing there, so it commits to walking across for the rest of the press.
+export function walkToward(h, pos, raftAngle, arc, mem) {
+  if (mem && Math.sign(h) !== mem.side) {
+    mem.side = Math.sign(h);
+    mem.to = null;
+  }
+  if (!h || !arc) return 0;
+  const ease = (d) => Math.max(-1, Math.min(1, d / 0.3)) * Math.min(1, Math.abs(h)); // no jitter on a laggy line
+  if (mem && mem.to !== null) {
+    if (Math.abs(mem.to - pos) > 0.03) return ease(mem.to - pos);
+    mem.to = null;
+  }
+  const goal = (h < 0 ? Math.PI : 0) - raftAngle; // that side of the screen, in raft-local angle
+  const diff = Math.atan2(Math.sin(goal - pos), Math.cos(goal - pos));
+  if (Math.abs(diff) < 0.03) return 0;
+  if (!arc.full && ((diff > 0 && pos >= arc.max) || (diff < 0 && pos <= arc.min))) {
+    const other = diff > 0 ? arc.min : arc.max;
+    const side = (p) => Math.sign(h) * Math.cos(p + raftAngle); // bigger = further that way
+    if (mem && side(other) > side(pos) + 0.05) {
+      mem.to = other;
+      return ease(other - pos);
+    }
+    return 0;
+  }
+  return ease(diff);
+}
+
 // rim angle -> raft-local position
 export function seatAt(pos) {
   return { x: RAFT.rim * Math.cos(pos), y: RAFT.rim * Math.sin(pos) };

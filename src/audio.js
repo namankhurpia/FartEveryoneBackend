@@ -8,7 +8,10 @@ const VARIANTS = 3;
 export function createAudio() {
   let ctx = null;
   let master = null;
-  let muted = false;
+  let muted = false; // set on master, which every sound goes through; remembered between visits
+  try {
+    muted = localStorage.getItem('tootraft.muted') === '1';
+  } catch {}
   let bank = null; // bank[player] = { hold: [AudioBuffer], tail: [AudioBuffer], deflate: AudioBuffer }
   const voices = [];
   const tails = [];
@@ -204,7 +207,11 @@ export function createAudio() {
     toggleMute() {
       muted = !muted;
       if (master) master.gain.value = muted ? 0 : 0.6;
+      try {
+        localStorage.setItem('tootraft.muted', muted ? '1' : '0');
+      } catch {}
       return muted;
     },
+    isMuted: () => muted,
   };
 }

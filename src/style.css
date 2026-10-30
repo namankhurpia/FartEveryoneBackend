@@ -425,3 +425,26 @@ body.touch #lobby .journey { margin: 2px auto 4px; }
   display: none; padding: 8px 14px; font-size: 14px; box-shadow: 0 6px 20px rgba(18, 48, 74, 0.15);
 }
 body.mode-menu .about-btn { display: block; }
+
+/* mute: fixed in the top-left corner on every screen; the in-game title sits beside it */
+.mute-btn {
+  position: fixed; top: calc(16px + env(safe-area-inset-top)); left: calc(16px + env(safe-area-inset-left)); z-index: 40;
+  width: 42px; height: 42px; padding: 0; font-size: 18px; line-height: 1; box-shadow: 0 6px 20px rgba(18, 48, 74, 0.15);
+}
+.mute-btn[aria-pressed='true'] { background: #fdecec; border-color: #ef4444; }
+.topbar { left: calc(66px + env(safe-area-inset-left)); }
+
+/* phone in-game header: [mute] title ... Leave / stats / player cards / start lights */
+@media (max-width: 720px) {
+  .topbar { top: 16px; right: 12px; left: 66px; gap: 6px; flex-wrap: wrap; }
+  .topbar .title { flex: 1 1 0; min-width: 0; padding: 5px 10px; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .topbar .title .level { overflow: hidden; text-overflow: ellipsis; }
+  .topbar .leave { flex: none; }
+  .topbar .stats { order: 3; flex: 1 1 100%; justify-content: space-between; gap: 8px; padding: 5px 10px; }
+  .topbar .stats .label { font-size: 9px; }
+  .topbar .stats span:not(.label) { font-size: 15px; }
+  body.touch .players { top: 118px; left: 12px; right: 12px; width: auto; transform: none; }
+  body.touch .player .top { font-size: 12px; gap: 4px; }
+  body.touch .player .puff { width: 14px; font-size: 11px; }
+  body.touch .start-lights { top: 190px; }
+}

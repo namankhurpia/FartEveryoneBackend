@@ -1,6 +1,6 @@
 // Headless sanity check of the sim with everyone facing the centre by default.
 import RAPIER from '@dimforge/rapier2d-compat';
-import { arcFor, createSim, FACE_CENTER, NUM_PLAYERS } from '../src/sim/sim.js';
+import { WALK_SPEED, arcFor, createSim, DT, FACE_CENTER, NUM_PLAYERS, walkToward } from '../src/sim/sim.js';
 import { LEVELS } from '../src/sim/levels.js';
 
 await RAPIER.init();
@@ -74,6 +74,60 @@ for (const id of ['plank', 'rapids']) {
   const inside = (p) => L.water.some((r) => Math.abs(p.x - r.x) <= r.w / 2 && Math.abs(p.y - r.y) <= r.h / 2);
   check(L.checkpoints.every(inside) && inside(L.finish), `${id}: every checkpoint and the finish sit on safe water`);
 }
+// left / right walk left / right on screen at every raft angle, for every crew size and seat
+{
+  let wrongWay = 0, stoppedEarly = 0, cases = 0;
+  const crews = [[0], [0, 1], [0, 1, 2], [0, 1, 2, 3]];
+  for (const crew of crews) for (const seat of crew) for (let deg = 0; deg < 360; deg += 15) for (const h of [-1, 1]) for (const f of [0.1, 0.5, 0.9]) {
+    const arc = arcFor(seat, crew);
+    const angle = (deg * Math.PI) / 180;
+    let pos = arc.full ? -Math.PI + f * 2 * Math.PI : arc.min + f * (arc.max - arc.min);
+    const screenX = (p) => h * Math.cos(p + angle); // bigger = further towards the side we asked for
+    let last = screenX(pos);
+    for (let t = 0; t < 60 * 6; t++) {
+      pos += walkToward(h, pos, angle, arc) * WALK_SPEED * DT;
+      if (!arc.full) pos = Math.max(arc.min, Math.min(arc.max, pos));
+      if (screenX(pos) < last - 1e-6) wrongWay++; // not one tick the other way
+      last = screenX(pos);
+    }
+    cases++;
+    // ended at the far side of the screen, or at the end of the slice on the way there
+    const atEnd = !arc.full && (pos <= arc.min + 1e-6 || pos >= arc.max - 1e-6);
+    if (!atEnd && last < 0.99) stoppedEarly++;
+  }
+  check(wrongWay === 0, `left/right never walk the wrong way on screen, not for one tick (${cases} raft angle + seat cases)`);
+  check(stoppedEarly === 0, 'left/right carry on until you reach that side of the raft or the end of your slice');
+}
+{
+  // and it holds while the raft is spinning under you
+  let wrongWay = 0;
+  for (const h of [-1, 1]) {
+    let pos = 1;
+    let angle = 0;
+    const arc = arcFor(0, [0]);
+    for (let t = 0; t < 60 * 10; t++) {
+      angle += 0.8 * DT; // the raft turns...
+      const before = h * Math.cos(pos + angle);
+      const step = walkToward(h, pos, angle, arc) * WALK_SPEED * DT; // ...and you keep holding the key
+      if (h * Math.cos(pos + step + angle) < before - 1e-6) wrongWay++;
+      pos += step;
+    }
+  }
+  check(wrongWay === 0, 'held left/right keep meaning left/right while the raft spins');
+}
+
+{
+  // parked at the end of your slice, the raft spins: the key must not go dead if the other end
+  // of the slice is further that way
+  const arc = arcFor(2); // quarter: 197-253 degrees
+  const angle = (149 * Math.PI) / 180;
+  const mem = { side: 0, to: null };
+  let pos = arc.min;
+  const start = Math.cos(pos + angle);
+  for (let t = 0; t < 120; t++) pos = Math.max(arc.min, Math.min(arc.max, pos + walkToward(-1, pos, angle, arc, mem) * WALK_SPEED * DT));
+  check(Math.cos(pos + angle) < start - 0.1, 'left/right never go dead at the end of your slice when the other end is further that way');
+}
+
 // level 3's first barrier is spiky: touching it is a splat
 {
   const sim = createSim(RAPIER, LEVELS.rapids);

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import WebSocket from 'ws';
 import { startServer } from '../server/index.js';
+import { RACE_LEVELS } from '../src/sim/levels.js';
 import { createPilot } from './pilot.js';
 
 const dataDir = mkdtempSync(join(tmpdir(), 'toot-test-'));
@@ -85,11 +86,11 @@ try {
   // every level is open for now; finishing one is still tracked
   server.db.saveGame({ level: 'canal', room: f.code, players: ['Solo'], crewSize: 1, timeMs: 80000, points: 938, deaths: 0, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() });
   const prog = await (await fetch(`http://127.0.0.1:${server.port}/api/progress?name=sOLO`)).json();
-  check(!!prog.cleared.canal && prog.unlocked.join() === 'canal,plank,rapids', 'progress API: finished levels are tracked (any case), every level is open');
+  check(!!prog.cleared.canal && prog.unlocked.join() === RACE_LEVELS.join(), 'progress API: finished levels are tracked (any case), every level is open');
   f.inbox.length = 0;
   f.send({ t: 'level', level: 'plank' });
   const picked = await f.waitFor((m) => m.t === 'room' && m.room.choice === 'plank', 3000, 'level picked');
-  check(picked.room.unlocked.join() === 'canal,plank,rapids', 'room can pick any level');
+  check(picked.room.unlocked.join() === RACE_LEVELS.join(), 'room can pick any level');
   f.send({ t: 'level', level: 'nope' });
   check((await f.waitFor((m) => m.t === 'error')).code === 'bad-level', 'a made-up level is refused');
   f.send({ t: 'start' });

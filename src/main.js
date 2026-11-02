@@ -709,6 +709,15 @@ if (net.hasSession()) {
   net.open();
 }
 
+// a little "still here" ping for /analytics, only while the tab is actually visible
+const pingId = Math.random().toString(36).slice(2, 12).padEnd(8, '0');
+function pingAnalytics() {
+  if (!document.hidden) fetch(`/api/ping?id=${pingId}&mode=${mode}`, { method: 'POST' }).catch(() => {});
+}
+pingAnalytics();
+setInterval(pingAnalytics, 30_000);
+document.addEventListener('visibilitychange', pingAnalytics);
+
 let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);

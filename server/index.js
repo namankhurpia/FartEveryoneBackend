@@ -38,6 +38,35 @@ export async function startServer({
   const root = resolve(staticDir);
   const compressed = new Map();
 
+  // --- rough analytics ---------------------------------------------------------------------
+  // Browsers ping every 30 s while the tab is visible, so people on the menu or in solo practice
+  // (who have no room connection) count as "on the site" too.
+  const PING_ALIVE_MS = 65_000;
+  const pings = new Map(); // tab id -> { at, mode }
+  function liveNow() {
+    const now = Date.now();
+    let onSite = 0, solo = 0;
+    for (const [id, p] of pings) {
+      if (now - p.at > PING_ALIVE_MS) pings.delete(id);
+      else {
+        onSite++;
+        if (p.mode === 'solo') solo++;
+      }
+    }
+    const r = rooms.stats();
+    return { onSite: Math.max(onSite, r.inRooms + solo), solo, ...r };
+  }
+  const BOTS = /bot|crawl|spider|slurp|preview|facebookexternalhit|whatsapp|telegram|discord|curl|wget|python|node|go-http|axios|headless|lighthouse|monitor|scan/i;
+  function countVisit(req) {
+    const ua = String(req.headers['user-agent'] || '');
+    if (!ua || BOTS.test(ua)) return;
+    // behind a local proxy (like Caddy for HTTPS) the real address is in x-forwarded-for
+    const direct = req.socket.remoteAddress || '';
+    const local = /^(::1|127\.|::ffff:127\.)/.test(direct);
+    const ip = local ? String(req.headers['x-forwarded-for'] || direct).split(',')[0].trim() : direct;
+    db.recordVisit(ip, ua);
+  }
+
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://x');
@@ -58,8 +87,20 @@ export async function startServer({
         const name = cleanName(url.searchParams.get('name'));
         return json(res, { name, ...db.history(name, 50) });
       }
+      if (url.pathname === '/api/ping' && req.method === 'POST') {
+        const id = url.searchParams.get('id') || '';
+        if (/^[a-z0-9]{6,24}$/.test(id) && (pings.size < 20_000 || pings.has(id))) {
+          pings.set(id, { at: Date.now(), mode: url.searchParams.get('mode') === 'solo' ? 'solo' : 'other' });
+          db.recordPeak(liveNow().onSite);
+        }
+        res.writeHead(204);
+        return res.end();
+      }
+      if (url.pathname === '/api/analytics') return json(res, { now: liveNow(), ...db.analytics(14) });
+      if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/about.html')) countVisit(req);
       // static files from the Vite build, falling back to index.html
-      let file = normalize(join(root, decodeURIComponent(url.pathname)));
+      const pathname = url.pathname === '/analytics' ? '/analytics.html' : url.pathname;
+      let file = normalize(join(root, decodeURIComponent(pathname)));
       if (file !== root && !file.startsWith(root + sep)) return send(res, 403, 'forbidden');
       const st = await stat(file).catch(() => null);
       if (st && st.isDirectory()) file = join(file, 'index.html');

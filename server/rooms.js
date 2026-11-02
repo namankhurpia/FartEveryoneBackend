@@ -285,6 +285,18 @@ export function createRooms({ RAPIER, db, roomTtlMs = 30_000, seatGraceMs = 10_0
     create: () => new Room(),
     get: (code) => rooms.get(String(code)),
     step: () => rooms.forEach((r) => r.step()),
+    // who's here right now, for /analytics
+    stats() {
+      const out = { rooms: 0, inRooms: 0, racing: 0 };
+      rooms.forEach((r) => {
+        const n = r.connectedCount;
+        if (!n) return;
+        out.rooms++;
+        out.inRooms += n;
+        if (r.phase === 'countdown' || r.phase === 'race') out.racing += n;
+      });
+      return out;
+    },
     sweep,
   };
 }

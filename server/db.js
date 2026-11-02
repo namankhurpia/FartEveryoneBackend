@@ -2,9 +2,12 @@
 // Every finished race is kept forever. Times are stored as UTC ISO strings; clients
 // show them in their own local time.
 
+import { createHash, randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+
+const today = () => new Date().toISOString().slice(0, 10); // UTC
 
 export function openDb(dataDir) {
   mkdirSync(dataDir, { recursive: true });
@@ -29,6 +32,27 @@ export function openDb(dataDir) {
   if (!cols.includes('crew_size')) db.exec('ALTER TABLE games ADD COLUMN crew_size INTEGER NOT NULL DEFAULT 4');
   db.exec('DROP INDEX IF EXISTS games_level_points');
   db.exec('CREATE INDEX IF NOT EXISTS games_board ON games (level, crew_size, points DESC)');
+
+  // Rough site analytics. Raw IPs are never stored: a visitor is only a salted hash, per day.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS daily (day TEXT PRIMARY KEY, views INTEGER NOT NULL DEFAULT 0, peak INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS visitors (day TEXT NOT NULL, hash TEXT NOT NULL, PRIMARY KEY (day, hash)) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS visitors_hash ON visitors (hash);
+  `);
+  db.prepare(`INSERT OR IGNORE INTO meta (key, value) VALUES ('visitor_salt', ?)`).run(randomBytes(16).toString('hex'));
+  const salt = db.prepare(`SELECT value FROM meta WHERE key = 'visitor_salt'`).get().value;
+  const addView = db.prepare(`INSERT INTO daily (day, views) VALUES (?, 1) ON CONFLICT (day) DO UPDATE SET views = views + 1`);
+  const addVisitor = db.prepare(`INSERT OR IGNORE INTO visitors (day, hash) VALUES (?, ?)`);
+  const setPeak = db.prepare(`INSERT INTO daily (day, peak) VALUES (?, ?) ON CONFLICT (day) DO UPDATE SET peak = MAX(peak, excluded.peak)`);
+  const viewTotals = db.prepare(`SELECT COALESCE(SUM(views), 0) AS views, COALESCE(MAX(peak), 0) AS peak FROM daily`);
+  const allVisitors = db.prepare(`SELECT COUNT(DISTINCT hash) AS n FROM visitors`);
+  const lastDays = db.prepare(`
+    SELECT d.day, d.views, d.peak,
+      (SELECT COUNT(*) FROM visitors v WHERE v.day = d.day) AS visitors,
+      (SELECT COUNT(*) FROM games g WHERE substr(g.finished_at, 1, 10) = d.day) AS races
+    FROM daily d ORDER BY d.day DESC LIMIT ?`);
+  const namedPlayers = db.prepare(`SELECT COUNT(DISTINCT lower(p.value)) AS n FROM games g, json_each(g.players) p`);
 
   const insert = db.prepare(`
     INSERT INTO games (level, room, players, crew_size, time_ms, points, deaths, started_at, finished_at)
@@ -83,6 +107,22 @@ export function openDb(dataDir) {
         byCrew: count(byCrew.all(), 'crew_size'),
         mine: name ? mineCount.get(name).n : null,
         games: (name ? mineRecent.all(name, limit) : recent.all(limit)).map(row),
+      };
+    },
+    recordVisit(ip, userAgent, day = today()) {
+      addView.run(day);
+      addVisitor.run(day, createHash('sha256').update(`${salt}|${ip}|${userAgent}`).digest('hex').slice(0, 32));
+    },
+    recordPeak: (online, day = today()) => setPeak.run(day, online),
+    analytics(days = 14) {
+      const t = viewTotals.get();
+      return {
+        totalViews: t.views,
+        totalVisitors: allVisitors.get().n,
+        peakEver: t.peak,
+        totalRaces: totals.get().n,
+        totalPlayers: namedPlayers.get().n,
+        days: lastDays.all(days).map((r) => ({ ...r })),
       };
     },
     close: () => db.close(),

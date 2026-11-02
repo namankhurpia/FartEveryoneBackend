@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>Bottoms Up! Analytics</title>
+    <style>
+      :root { --ink: #12304a; --muted: #55697c; --line: #d6e3ec; --card: #fff; --bg: #eef7fc; --accent: #d9560f; --live: #15803d; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 ui-rounded, 'SF Pro Rounded', system-ui, -apple-system, 'Segoe UI', sans-serif; }
+      main { max-width: 860px; margin: 0 auto; padding: 28px 16px 48px; }
+      header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+      h1 { margin: 0; font-size: 30px; font-weight: 900; }
+      h2 { margin: 28px 0 10px; font-size: 14px; letter-spacing: 0.6px; text-transform: uppercase; color: var(--muted); }
+      a { color: var(--accent); font-weight: 700; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+      .tile { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+      .tile .v { font-size: 34px; font-weight: 900; line-height: 1.1; font-variant-numeric: tabular-nums; }
+      .tile .k { font-size: 13px; color: var(--muted); font-weight: 600; }
+      .tile.big .v { color: var(--live); }
+      .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--live); margin-right: 6px; animation: pulse 1.6s ease-in-out infinite; }
+      @keyframes pulse { 50% { opacity: 0.35; } }
+      @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+      .wrap { overflow-x: auto; background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+      table { width: 100%; border-collapse: collapse; font-size: 15px; font-variant-numeric: tabular-nums; }
+      th, td { padding: 9px 14px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+      th:first-child, td:first-child { text-align: left; }
+      th { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+      tr:last-child td { border-bottom: none; }
+      .note { margin-top: 14px; font-size: 13px; color: var(--muted); }
+      .err { color: #b91c1c; font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>💨 Analytics</h1>
+        <a href="/">← Back to the game</a>
+      </header>
+      <h2><span class="dot"></span>Right now</h2>
+      <div class="grid" id="now"></div>
+      <h2>All time</h2>
+      <div class="grid" id="all"></div>
+      <h2>Last 14 days (UTC)</h2>
+      <div class="wrap"><table id="days"></table></div>
+      <p class="note" id="note">Loading…</p>
+      <p class="note">Rough numbers: known bots are filtered out, one person on two devices counts twice, and people sharing a network and browser can count once. Peak is the most people on the site at once. No raw IP addresses are stored.</p>
+    </main>
+    <script>
+      const fmt = (n) => Number(n).toLocaleString();
+      function tiles(el, items) {
+        el.textContent = '';
+        for (const [v, k, big] of items) {
+          const t = document.createElement('div');
+          t.className = big ? 'tile big' : 'tile';
+          const a = document.createElement('div');
+          a.className = 'v';
+          a.textContent = fmt(v);
+          const b = document.createElement('div');
+          b.className = 'k';
+          b.textContent = k;
+          t.append(a, b);
+          el.append(t);
+        }
+      }
+      async function load() {
+        const note = document.getElementById('note');
+        try {
+          const d = await (await fetch('/api/analytics')).json();
+          tiles(document.getElementById('now'), [
+            [d.now.onSite, 'on the site', true],
+            [d.now.inRooms, 'in rooms', true],
+            [d.now.racing, 'racing', true],
+            [d.now.solo, 'in solo practice', true],
+            [d.now.rooms, 'active rooms', true],
+          ]);
+          tiles(document.getElementById('all'), [
+            [d.totalVisitors, 'unique visitors'],
+            [d.totalViews, 'page views'],
+            [d.totalRaces, 'races finished'],
+            [d.totalPlayers, 'player names that finished a race'],
+            [d.peakEver, 'most online at once'],
+          ]);
+          const table = document.getElementById('days');
+          table.textContent = '';
+          const head = table.insertRow();
+          for (const h of ['Day', 'Visitors', 'Views', 'Races', 'Peak']) {
+            const th = document.createElement('th');
+            th.textContent = h;
+            head.append(th);
+          }
+          if (!d.days.length) {
+            const td = table.insertRow().insertCell();
+            td.colSpan = 5;
+            td.textContent = 'No visits yet.';
+          }
+          for (const r of d.days) {
+            const row = table.insertRow();
+            for (const v of [r.day, fmt(r.visitors), fmt(r.views), fmt(r.races), fmt(r.peak)]) row.insertCell().textContent = v;
+          }
+          note.className = 'note';
+          note.textContent = `Updates every 10 seconds. Last updated ${new Date().toLocaleTimeString()}.`;
+        } catch {
+          note.className = 'note err';
+          note.textContent = "Couldn't reach the server. Retrying…";
+        }
+      }
+      load();
+      setInterval(load, 10000);
+    </script>
+  </body>
+</html>

@@ -107,6 +107,21 @@ try {
   e.send({ t: 'join', name: 'Eve', code: a.code });
   check((await e.waitFor((m) => m.t === 'error')).code === 'room-full', 'fifth player is turned away');
 
+  // /analytics: live players, and visits with bots filtered out and no double-counting of uniques
+  const api = `http://127.0.0.1:${server.port}`;
+  const browser = { headers: { 'user-agent': 'Mozilla/5.0 Safari/605', 'x-test': '1' } };
+  await fetch(api + '/', browser);
+  await fetch(api + '/', browser);
+  await fetch(api + '/', { headers: { 'user-agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' } });
+  await fetch(api + '/og.jpg', browser);
+  await fetch(api + '/api/ping?id=testtab01&mode=solo', { method: 'POST' });
+  const stats = await (await fetch(api + '/api/analytics')).json();
+  check(stats.now.inRooms === 4 && stats.now.rooms === 1 && stats.now.solo === 1 && stats.now.onSite === 5, 'analytics: live counts of players in rooms and solo tabs');
+  check(stats.totalViews === 2 && stats.totalVisitors === 1, 'analytics: 2 views by 1 visitor; the bot and image requests are not counted');
+  check(stats.days[0].views === 2 && stats.days[0].peak >= 5, 'analytics: per-day numbers and peak');
+  const page = await fetch(api + '/analytics');
+  check(page.status === 200 && (await page.text()).includes('noindex') , '/analytics page is served and kept out of search results');
+
   // a tab that goes quiet mid-fart (backgrounded, phone switched apps) must stop farting
   c.send({ t: 'input', fart: true, move: 0, aim: 0 });
   await a.waitFor((m) => m.t === 'snap' && m.s.players[2].farting, 3000, 'C farting');

@@ -3,6 +3,7 @@ User-agent: *
 Allow: /
 Disallow: /api/
 Disallow: /ws
+Disallow: /analytics
 
 # AI crawlers, named explicitly because some of them only come when invited
 User-agent: GPTBot
@@ -23,5 +24,6 @@ User-agent: Meta-ExternalAgent
 Allow: /
 Disallow: /api/
 Disallow: /ws
+Disallow: /analytics
 
 Sitemap: __SITE_URL__/sitemap.xml

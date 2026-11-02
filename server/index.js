@@ -115,7 +115,7 @@ export async function startServer({
       const accepts = String(req.headers['accept-encoding'] || '');
       const encoding = !COMPRESSIBLE.has(ext) ? null : /\bbr\b/.test(accepts) ? 'br' : /\bgzip\b/.test(accepts) ? 'gzip' : null;
       if (encoding) {
-        const key = `${encoding}:${file}:${body.length}`;
+        const key = `${encoding}:${file}:${(await stat(file)).mtimeMs}`; // a rebuilt file gets compressed afresh
         if (!compressed.has(key)) {
           compressed.set(key, encoding === 'br' ? brotliCompressSync(body, { params: { [zlib.BROTLI_PARAM_QUALITY]: 9 } }) : gzipSync(body));
         }

@@ -2,6 +2,7 @@
 // walks each player to the spot behind the raft (relative to where it wants to go) and farts
 // with the ones pushing roughly the right way.
 import { LEVELS } from '../src/sim/levels.js';
+import { RAFT, WINDMILL_ARM } from '../src/sim/sim.js';
 
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 
@@ -13,6 +14,41 @@ export function createPilot(level = LEVELS.canal, { speed = 4, line = false, cos
     .map((m, i) => ({ m, i }))
     .filter(({ m }) => m.spiky && m.from.y === m.to.y)
     .map(({ m, i }) => ({ i, y: m.from.y, cx: (m.from.x + m.to.x) / 2, lane: Math.min(m.from.x, m.to.x) - 0.5, right: Math.max(m.from.x, m.to.x), dash: false }));
+  // windmills: wait outside their reach until the whole crossing looks clear of the arms
+  const REACH = (m) => m.radius + WINDMILL_ARM / 2 + RAFT.radius + 0.3;
+  const mills = level.movers
+    .map((m, i) => ({ m, i }))
+    .filter(({ m }) => m.type === 'windmill')
+    .map(({ m, i }) => {
+      const inside = wps.map(([x, y]) => Math.hypot(x - m.x, y - m.y) < REACH(m));
+      const first = inside.indexOf(true);
+      return { m, i, first, last: inside.lastIndexOf(true), wait: Math.max(0, first - 1), go: false };
+    });
+  // would a raft following the route from here at this speed stay clear of every arm?
+  function clearCrossing(s, mill, v) {
+    const { m, i } = mill;
+    const pts = [[s.raft.x, s.raft.y], ...wps.slice(mill.first, mill.last + 2)];
+    const armAngle = s.movers[i].angle;
+    let t = 0;
+    let speedNow = Math.hypot(s.raft.vx, s.raft.vy);
+    for (let k = 1; k < pts.length; k++) {
+      const [ax, ay] = pts[k - 1];
+      const [bx, by] = pts[k];
+      const len = Math.hypot(bx - ax, by - ay) || 0.001;
+      for (let d = 0; d <= len; d += 0.4) {
+        speedNow = Math.min(v, speedNow + 3 * (0.4 / Math.max(speedNow, 0.5))); // starts from a standstill
+        t += 0.4 / speedNow;
+        const px = ax + ((bx - ax) * d) / len - m.x;
+        const py = ay + ((by - ay) * d) / len - m.y;
+        for (let n = 0; n < m.blades; n++) {
+          const a = armAngle + m.speed * t + (n * 2 * Math.PI) / m.blades;
+          const along = Math.max(0, Math.min(m.radius, px * Math.cos(a) + py * Math.sin(a)));
+          if (Math.hypot(px - along * Math.cos(a), py - along * Math.sin(a)) < WINDMILL_ARM / 2 + RAFT.radius + 0.3) return false;
+        }
+      }
+    }
+    return true;
+  }
   return function commands(s, events = []) {
     if (events.some((e) => e.type === 'respawned')) {
       // back at a checkpoint: carry on from the nearest waypoint ahead
@@ -25,6 +61,20 @@ export function createPilot(level = LEVELS.canal, { speed = 4, line = false, cos
     let [tx, ty] = wps[w];
     if (Math.hypot(tx - s.raft.x, ty - s.raft.y) < 2.5 && w < wps.length - 1) [tx, ty] = wps[++w];
     let gate = null; // 'wait' | 'dash' while handling a spiky bar
+    for (const mill of mills) {
+      if (w > mill.last + 1 || w < mill.wait - 1) {
+        mill.go = false;
+        continue;
+      }
+      const ready = s.crew.every((i) => !s.players[i].empty && s.players[i].gas > 0.5);
+      if (!mill.go && ready && Math.hypot(wps[mill.wait][0] - s.raft.x, wps[mill.wait][1] - s.raft.y) < 3 && clearCrossing(s, mill, 3.5)) mill.go = true;
+      if (mill.go) gate = 'dash';
+      else {
+        [tx, ty] = wps[mill.wait];
+        w = Math.min(w, mill.wait);
+        gate = 'wait';
+      }
+    }
     for (const g of gates) {
       // only when we're in the bar's own canal, just short of it
       if (s.raft.y < g.y - 8 || s.raft.y > g.y + 3.5 || Math.abs(s.raft.x - g.cx) > 7) {
@@ -67,7 +117,7 @@ export function createPilot(level = LEVELS.canal, { speed = 4, line = false, cos
     if (gate === 'wait' && d < 2.5) {
       return s.players.map((p) => ({ aim: 0, fart: false, move: Math.sign(wrap(-Math.PI / 2 - p.pos)) })); // walk to the back
     }
-    if (gate === 'dash') {
+    if (gate === 'dash' && !mills.some((m) => m.go)) {
       const lateral = (tx - s.raft.x) * 1.2 - s.raft.vx;
       const fwd = Math.atan2(5, lateral) - s.raft.angle;
       return s.players.map((p) => ({ aim: 0, move: 0, fart: Math.cos(wrap(fwd - (p.pos + Math.PI))) > 0.3 && !p.empty }));

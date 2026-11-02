@@ -367,6 +367,10 @@ function renderLevelPick(room, isHost) {
     onPick: (id) => net.send({ t: 'level', level: id }),
     dir: 'across', // compact, so the lobby card always fits
   });
+  // more levels than fit across: keep the selected one in view
+  const box = $('level-pick-scroll');
+  const here = box.querySelector('.here');
+  if (here) box.scrollLeft = Math.max(0, here.offsetLeft - box.clientWidth / 2);
 }
 
 function renderResults(room) {
@@ -716,7 +720,9 @@ if (net.hasSession()) {
   $('landing-error').textContent = 'Rejoining your game…';
   net.open();
 } else if (new URLSearchParams(location.search).has('practice')) {
-  startSolo(); // one person drives all four: handy for testing and screenshots (?practice)
+  // one person drives all four: handy for testing and screenshots (?practice or ?practice=wells)
+  const id = new URLSearchParams(location.search).get('practice');
+  startSolo(RACE_LEVELS.includes(id) ? id : RACE_LEVELS[0]);
 }
 
 // a little "still here" ping for /analytics, only while the tab is actually visible

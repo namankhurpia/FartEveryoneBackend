@@ -341,7 +341,7 @@ body.touch.phase-lobby .players { display: none; }
 body.mode-menu .controls-hint, body.touch .controls-hint, body.phase-results .controls-hint { display: none; }
 
 /* --- journey map ------------------------------------------------------------------------ */
-.journey { position: relative; margin: 6px auto; max-width: 100%; }
+.journey { position: relative; margin: 6px auto; flex: none; }
 .journey svg { position: absolute; inset: 0; overflow: visible; }
 .journey .river { fill: none; stroke: #7cc8ef; stroke-width: 16; stroke-linecap: round; opacity: 0.9; }
 .journey .river-flow {
@@ -485,3 +485,16 @@ body.mode-menu .menu-error:not(:empty) { display: block; }
   .multi-options { grid-template-columns: 1fr; }
   .home-card h1 { font-size: 38px; }
 }
+
+/* the lobby's journey scrolls sideways once there are more levels than fit */
+.journey-scroll { overflow-x: auto; overflow-y: hidden; margin: 0 -6px; padding: 0 6px; -webkit-overflow-scrolling: touch; }
+.journey-scroll .journey { margin: 6px 0; max-width: none; }
+/* single player on phones: the Play button first, then the (long) map to pick from */
+@media (max-width: 620px) {
+  .levels-layout .level-detail { order: -1; flex-basis: 100%; }
+}
+
+/* menu pages stay clear of the fixed mute and About buttons at the top */
+.page { align-items: flex-start; padding-top: calc(66px + env(safe-area-inset-top)); }
+.page-card { max-height: calc(100vh - 82px - env(safe-area-inset-top)); max-height: calc(100dvh - 82px - env(safe-area-inset-top)); }
+@media (min-height: 760px) and (min-width: 621px) { .page { align-items: center; padding-top: 16px; } }

@@ -2,7 +2,7 @@
 // Sim (x, y) maps to three (x, height, -y); sim angle maps to rotation.y.
 
 import * as THREE from 'three';
-import { ALL_SEATS, NUM_PLAYERS, RAFT, arcFor, seatAt } from './sim/sim.js';
+import { ALL_SEATS, NUM_PLAYERS, RAFT, RING_THICK, WINDMILL_ARM, WINDMILL_TOWER, arcFor, ringSegments, seatAt } from './sim/sim.js';
 
 export const PLAYER_COLORS = ['#ff5a5f', '#3fa7ff', '#ffc93c', '#5ad16a'];
 const DECK_Y = 0.42; // the crew sit on the raft's tube
@@ -84,6 +84,64 @@ export function createRenderer(container) {
   let flags = [];
   let currentTextures = [];
   let moverMeshes = [];
+  let wellGlows = [];
+
+  // A windmill: a tower with arms sweeping round, spikes hanging from them down to the water.
+  function buildWindmill(g, m, metal) {
+    const tower = shadowed(new THREE.Mesh(new THREE.CylinderGeometry(WINDMILL_TOWER * 0.7, WINDMILL_TOWER, 4.2, 12), mat('#6b5a4a', { roughness: 0.9 })));
+    tower.position.y = 2.1;
+    const cap = shadowed(new THREE.Mesh(new THREE.ConeGeometry(WINDMILL_TOWER + 0.25, 1, 12), mat('#8f1d1d')));
+    cap.position.y = 4.7;
+    g.add(tower, cap);
+    const beamMat = mat('#4a3322', { roughness: 0.85 });
+    const sailMat = mat('#f1ead9', { roughness: 0.9, side: THREE.DoubleSide });
+    const spikeGeo = new THREE.ConeGeometry(0.16, 1.5, 6).rotateX(Math.PI); // points down
+    for (let k = 0; k < m.blades; k++) {
+      const arm = new THREE.Group();
+      arm.rotation.y = (k * 2 * Math.PI) / m.blades;
+      const beam = shadowed(new THREE.Mesh(new THREE.BoxGeometry(m.radius, 0.22, 0.22), beamMat));
+      beam.position.set(m.radius / 2, 3.6, 0);
+      const sail = shadowed(new THREE.Mesh(new THREE.BoxGeometry(m.radius * 0.75, 0.05, WINDMILL_ARM + 0.15), sailMat));
+      sail.position.set(m.radius * 0.58, 3.78, 0);
+      arm.add(beam, sail);
+      const n = Math.max(3, Math.round(m.radius / 0.75));
+      for (let i = 1; i <= n; i++) {
+        const x = (i / n) * (m.radius - 0.15);
+        // a rod from the beam down to the spike, whose tip touches the water
+        const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 2.1), beamMat);
+        rod.position.set(x, 2.55, 0);
+        const spike = shadowed(new THREE.Mesh(spikeGeo, metal));
+        spike.position.set(x, 0.75, 0);
+        arm.add(rod, spike);
+      }
+      g.add(arm);
+    }
+  }
+
+  // A spike circle: spikes all the way round, with bright posts marking the two openings.
+  function buildRing(g, m, metal) {
+    const baseMat = mat('#8f1d1d');
+    const spikeGeo = new THREE.ConeGeometry(0.17, 0.75, 6);
+    const segs = ringSegments(m);
+    for (const s of segs) {
+      const base = new THREE.Mesh(new THREE.BoxGeometry(s.len, 0.22, RING_THICK), baseMat);
+      base.position.set(Math.cos(s.a) * m.r, 0.1, -Math.sin(s.a) * m.r);
+      base.rotation.y = s.a + Math.PI / 2;
+      const spike = shadowed(new THREE.Mesh(spikeGeo, metal));
+      spike.position.set(Math.cos(s.a) * m.r, 0.55, -Math.sin(s.a) * m.r);
+      g.add(base, spike);
+    }
+    const postMat = mat('#ffb020', { emissive: '#ff8a00', emissiveIntensity: 0.4 });
+    const halfGap = (m.gapDeg * Math.PI) / 360;
+    for (const d of m.gaps) {
+      for (const side of [-1, 1]) {
+        const a = (d * Math.PI) / 180 + side * halfGap;
+        const post = shadowed(new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, 1.5, 8), postMat));
+        post.position.set(Math.cos(a) * m.r, 0.75, -Math.sin(a) * m.r);
+        g.add(post);
+      }
+    }
+  }
 
   function buildLevel(level) {
     const lg = new THREE.Group();
@@ -190,12 +248,18 @@ export function createRenderer(container) {
     ch.lineTo(50, 22);
     ch.stroke();
     const currentTextures = [];
-    for (const c of level.currents) {
+    // a level-wide river shows its arrows on all of the water
+    const flowing = level.flow ? level.water.map((r) => ({ ...r, ...level.flow })) : [];
+    for (const c of [...level.currents, ...flowing]) {
       const tex = new THREE.CanvasTexture(chevron);
       tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-      tex.repeat.set(c.w / 2.5, c.h / 2.5);
+      // the plane gets turned to point along the flow, so a sideways one swaps its width and height
+      const sideways = Math.abs(c.ax) > Math.abs(c.ay);
+      const pw = sideways ? c.h : c.w;
+      const ph = sideways ? c.w : c.h;
+      tex.repeat.set(pw / 2.5, ph / 2.5);
       const plane = new THREE.Mesh(
-        new THREE.PlaneGeometry(c.w, c.h).rotateX(-Math.PI / 2),
+        new THREE.PlaneGeometry(pw, ph).rotateX(-Math.PI / 2),
         // stronger currents get bolder, faster arrows
         new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: Math.min(0.85, 0.3 + Math.hypot(c.ax, c.ay) * 0.12), depthWrite: false }),
       );
@@ -223,7 +287,9 @@ export function createRenderer(container) {
     })();
     const moverMeshes = level.movers.map((m) => {
       const g = new THREE.Group();
-      if (m.type === 'rotor') {
+      if (m.type === 'windmill') buildWindmill(g, m, metal);
+      else if (m.type === 'ring') buildRing(g, m, metal);
+      else if (m.type === 'rotor') {
         const log = shadowed(new THREE.Mesh(new THREE.CylinderGeometry(m.h / 2, m.h / 2, m.w, 14).rotateZ(Math.PI / 2), mat('#8a5a33')));
         log.position.y = 0.35;
         const hub = shadowed(new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.45, 1.6, 12), woodDark));
@@ -259,6 +325,34 @@ export function createRenderer(container) {
       lg.add(g);
       return g;
     });
+
+    // --- wells: holes in the track, glowing from somewhere far below ---------------
+    const wellGlows = [];
+    for (const w of level.wells || []) {
+      const c = document.createElement('canvas');
+      c.width = c.height = 128;
+      const g = c.getContext('2d');
+      const grad = g.createRadialGradient(64, 64, 4, 64, 64, 64);
+      grad.addColorStop(0, '#000000');
+      grad.addColorStop(0.45, '#2a0500');
+      grad.addColorStop(0.8, '#a81e05');
+      grad.addColorStop(1, '#ff7a1a');
+      g.fillStyle = grad;
+      g.fillRect(0, 0, 128, 128);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const hole = new THREE.Mesh(new THREE.CircleGeometry(w.r, 40).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: tex }));
+      hole.position.copy(toWorld(w.x, w.y, 0.04));
+      const rim = shadowed(new THREE.Mesh(new THREE.TorusGeometry(w.r, 0.16, 8, 40).rotateX(Math.PI / 2), mat('#3a3f47', { roughness: 0.95 })));
+      rim.position.copy(toWorld(w.x, w.y, 0.08));
+      const glow = new THREE.Mesh(
+        new THREE.RingGeometry(w.r, w.r + 0.55, 40).rotateX(-Math.PI / 2),
+        new THREE.MeshBasicMaterial({ color: '#ff5a1f', transparent: true, opacity: 0.35, depthWrite: false }),
+      );
+      glow.position.copy(toWorld(w.x, w.y, 0.05));
+      lg.add(hole, rim, glow);
+      wellGlows.push(glow.material);
+    }
 
     // --- a drop: water channels on stone towers over a misty chasm ---------------
     if (level.water) {
@@ -309,7 +403,7 @@ export function createRenderer(container) {
         }
       }
     }
-    return { lg, flags, currentTextures, moverMeshes };
+    return { lg, flags, currentTextures, moverMeshes, wellGlows };
   }
 
   // Far below the water channels of levels with a drop: a hazy valley with a winding river,
@@ -404,6 +498,7 @@ export function createRenderer(container) {
     flags = built.flags;
     currentTextures = built.currentTextures;
     moverMeshes = built.moverMeshes;
+    wellGlows = built.wellGlows;
     scene.add(levelGroup);
     // levels with a drop swap the open sea for a misty chasm (and back again for the others)
     const chasm = !!level.water;
@@ -698,6 +793,7 @@ export function createRenderer(container) {
     time += frameDt;
     water.material.uniforms.uTime.value = time;
     for (const c of currentTextures) c.tex.offset.y += c.speed * frameDt;
+    for (const w of wellGlows) w.opacity = 0.3 + 0.18 * Math.sin(time * 3.1);
 
     const rx = lerp(prev.raft.x, curr.raft.x, alpha);
     const ry = lerp(prev.raft.y, curr.raft.y, alpha);

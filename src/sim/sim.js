@@ -143,6 +143,25 @@ export function createSim(RAPIER, level = LEVELS.canal, { crew = ALL_SEATS } = {
     const body = world.createRigidBody(
       RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(pose.x, pose.y).setRotation(pose.angle),
     );
+    // everything on this body that hurts: a sensor at (x, y) rotated by `angle`, half-sizes hx, hy
+    const spikes = (hx, hy, x, y, angle) => {
+      const c = world.createCollider(RAPIER.ColliderDesc.cuboid(hx, hy).setTranslation(x, y).setRotation(angle).setSensor(true), body);
+      kinds.set(c.handle, { kind: 'spike', index: -1 });
+    };
+    if (def.type === 'windmill') {
+      // a solid tower in the middle, and arms you can't touch sweeping round it
+      world.createCollider(RAPIER.ColliderDesc.ball(WINDMILL_TOWER).setRestitution(0.5).setFriction(0.35), body);
+      for (let k = 0; k < def.blades; k++) {
+        const a = (k * 2 * Math.PI) / def.blades;
+        spikes(def.radius / 2, WINDMILL_ARM / 2, (Math.cos(a) * def.radius) / 2, (Math.sin(a) * def.radius) / 2, a);
+      }
+      return { def, body };
+    }
+    if (def.type === 'ring') {
+      // a circle of spikes, solid all the way round except for its openings
+      for (const seg of ringSegments(def)) spikes(seg.len / 2, RING_THICK / 2, Math.cos(seg.a) * def.r, Math.sin(seg.a) * def.r, seg.a + Math.PI / 2);
+      return { def, body };
+    }
     world.createCollider(RAPIER.ColliderDesc.cuboid(def.w / 2, def.h / 2).setRestitution(0.5).setFriction(0.35), body);
     // a spiky mover: touching it is a splat, like the spike strips
     if (def.spiky) {
@@ -283,6 +302,19 @@ export function createSim(RAPIER, level = LEVELS.canal, { crew = ALL_SEATS } = {
     for (const c of level.currents) {
       if (inRect(pos, c)) raft.applyImpulse({ x: c.ax * mass * DT, y: c.ay * mass * DT }, true);
     }
+    // wells suck: the closer you get, the harder they drag the raft in
+    for (const w of level.wells || []) {
+      const dx = w.x - pos.x;
+      const dy = w.y - pos.y;
+      const d = Math.hypot(dx, dy);
+      const edge = d - w.r; // how far from the lip of the well
+      if (d > 0 && edge < WELL_PULL_RANGE) {
+        const a = ((level.wellPull ?? WELL_PULL) * (1 - Math.max(0, edge) / WELL_PULL_RANGE) * mass * DT) / d;
+        raft.applyImpulse({ x: dx * a, y: dy * a }, true);
+      }
+    }
+    // a river: the whole level flows, all the time
+    if (level.flow) raft.applyImpulse({ x: level.flow.ax * mass * DT, y: level.flow.ay * mass * DT }, true);
 
     const t = state.tick * DT;
     for (const m of movers) {
@@ -299,6 +331,11 @@ export function createSim(RAPIER, level = LEVELS.canal, { crew = ALL_SEATS } = {
     if (level.water && (state.phase === 'playing' || state.phase === 'ready')) {
       const at = raft.translation();
       if (!level.water.some((r) => inRect(at, r))) startRespawn('fell', events);
+    }
+    // wells: holes in the track. Let the raft's centre over one and it's gone
+    if (level.wells && (state.phase === 'playing' || state.phase === 'ready')) {
+      const at = raft.translation();
+      if (level.wells.some((w) => Math.hypot(at.x - w.x, at.y - w.y) < w.r)) startRespawn('fell', events);
     }
 
     world.intersectionPairsWith(raftCollider, (other) => {
@@ -395,12 +432,32 @@ export function createSim(RAPIER, level = LEVELS.canal, { crew = ALL_SEATS } = {
   return { level, step, snapshot, respawn, restart, go, free, setCrew, debugPlace };
 }
 
+export const WELL_PULL = 3.5; // m/s^2 at the lip of a well, fading to nothing...
+export const WELL_PULL_RANGE = 3.5; // ...this far from it
+export const WINDMILL_TOWER = 0.6; // radius of the solid tower
+export const WINDMILL_ARM = 0.7; // width of the deadly part of an arm
+export const RING_THICK = 0.55;
+
+// One spike circle as short straight pieces, leaving out the openings. def.gaps are the middle of
+// each opening in degrees (0 = east, 90 = north), def.gapDeg how wide each one is.
+export function ringSegments(def) {
+  const out = [];
+  const step = 0.8 / def.r; // pieces about 0.8 m long
+  const gaps = def.gaps.map((d) => (d * Math.PI) / 180);
+  const halfGap = (def.gapDeg * Math.PI) / 360;
+  for (let a = 0; a < 2 * Math.PI; a += step) {
+    const inGap = gaps.some((g) => Math.abs(Math.atan2(Math.sin(a - g), Math.cos(a - g))) < halfGap);
+    if (!inGap) out.push({ a, len: 0.8 * 1.15 });
+  }
+  return out;
+}
+
 export function moverPose(def, t) {
   if (def.type === 'slider') {
     const s = 0.5 - 0.5 * Math.cos((2 * Math.PI * t) / def.period + (def.phase || 0));
     return { x: def.from.x + (def.to.x - def.from.x) * s, y: def.from.y + (def.to.y - def.from.y) * s, angle: 0 };
   }
-  return { x: def.x, y: def.y, angle: def.speed * t + (def.phase || 0) };
+  return { x: def.x, y: def.y, angle: (def.speed || 0) * t + (def.phase || 0) };
 }
 
 function inRect(p, r) {

@@ -138,6 +138,44 @@ for (const id of ['plank', 'rapids']) {
   check(Math.cos(pos + angle) < start - 0.1, 'left/right never go dead at the end of your slice when the other end is further that way');
 }
 
+// the new hazards really hurt, and the levels are laid out sanely
+{
+  const hit = (id, x, y, ticks = 3) => {
+    const sim = createSim(RAPIER, LEVELS[id]);
+    sim.go();
+    const ev = [];
+    for (let t = 0; t < ticks; t++) {
+      sim.debugPlace(x, y, 0);
+      ev.push(...sim.step([]));
+    }
+    sim.free();
+    return ev.map((e) => e.type);
+  };
+  check(hit('wells', -3, 12).includes('fell'), 'dropping into a well is a fall');
+  check(!hit('wells', 3, 12).includes('fell'), 'beside a well is safe');
+  check(hit('inferno', 0, 28.5).includes('ouch'), 'touching a spike circle is a splat');
+  check(!hit('inferno', 0, 22).includes('ouch'), 'the middle of a spike circle is safe');
+  check(!hit('inferno', 0, 15.5).includes('ouch'), 'an opening in a spike circle is safe');
+  // windmill: at time 0 arm 0 points east, so just east of the tower is on it
+  check(hit('windmills', 3.5, 28, 1).includes('ouch'), 'touching a windmill arm is a splat');
+  check(!hit('windmills', 0, 18, 1).includes('ouch'), 'out of reach of a windmill is safe');
+  // the river pushes all the time, the same everywhere
+  const sim = createSim(RAPIER, LEVELS.inferno);
+  sim.go();
+  for (let t = 0; t < 30; t++) sim.step([]);
+  check(sim.snapshot().raft.vx > 0.3, 'the river pushes the raft along with nobody farting');
+  sim.free();
+  for (const id of ['windmills', 'wells', 'inferno']) {
+    const L = LEVELS[id];
+    const onWater = ([x, y]) => L.water.some((r) => Math.abs(x - r.x) <= r.w / 2 && Math.abs(y - r.y) <= r.h / 2);
+    const inWell = ([x, y], pad = 0) => (L.wells || []).some((w) => Math.hypot(x - w.x, y - w.y) < w.r + pad);
+    const spots = [...L.checkpoints.map((c) => [c.x, c.y]), [L.finish.x, L.finish.y]];
+    check(spots.every(onWater) && !spots.some((p) => inWell(p, 1)), `${id}: checkpoints and finish are on water, clear of wells`);
+    check(L.route.every(onWater) && !L.route.some((p) => inWell(p)), `${id}: the route stays on the water and out of the wells`);
+    check(L.number === 3 + ['windmills', 'wells', 'inferno'].indexOf(id) + 1, `${id}: level number is right`);
+  }
+}
+
 // level 3's first barrier is spiky: touching it is a splat
 {
   const sim = createSim(RAPIER, LEVELS.rapids);

@@ -63,6 +63,9 @@ export function cleanCrew(crew) {
 // the rim in whichever direction moves you towards that side of the screen right now, and stops
 // when you're as far that way as you can go (or at the end of your slice). h: -1 (left) .. 1
 // (right). The camera never rotates, so world +x is always screen right.
+// A lone player owns the whole rim, so there is no "side" to stop at: left always walks
+// clockwise and right counter-clockwise, whatever the raft does, and holding one goes round in
+// circles. They start at the back of the raft, where clockwise is left on screen.
 // `mem` (optional, one object per player, kept while the key is held) covers the awkward case:
 // parked at one end of your slice with the other end further that way. Otherwise the key would
 // do nothing there, so it commits to walking across for the rest of the press.
@@ -72,6 +75,7 @@ export function walkToward(h, pos, raftAngle, arc, mem) {
     mem.to = null;
   }
   if (!h || !arc) return 0;
+  if (arc.full) return Math.max(-1, Math.min(1, h));
   const ease = (d) => Math.max(-1, Math.min(1, d / 0.3)) * Math.min(1, Math.abs(h)); // no jitter on a laggy line
   if (mem && mem.to !== null) {
     if (Math.abs(mem.to - pos) > 0.03) return ease(mem.to - pos);

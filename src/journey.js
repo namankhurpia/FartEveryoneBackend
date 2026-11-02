@@ -84,7 +84,7 @@ export function renderJourney(el, { levels, unlocked, cleared = {}, current, pic
     const name = document.createElement('b');
     name.textContent = lvl.name;
     const sub = document.createElement('small');
-    sub.textContent = soon ? '' : done ? `best ${fmt(cleared[lvl.id].best_ms)}` : open ? (here ? 'you are here' : 'unlocked') : `finish level ${levels[i - 1].number}`;
+    sub.textContent = soon ? '' : done ? `best ${fmt(cleared[lvl.id].best_ms)}` : open ? (here ? 'selected' : 'tap to pick') : `finish level ${levels[i - 1].number}`;
     label.append(name, sub);
     stop.append(label);
     el.append(stop);

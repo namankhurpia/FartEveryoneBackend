@@ -1,6 +1,6 @@
 // Client entry. Three modes share one renderer and one frame loop:
 //   menu   - landing screen; a local pond sim bobs along in the background
-//   solo   - local sim of level 1, you drive all four players
+//   solo   - local practice (?practice): you drive all four players
 //   online - the server runs the sim; we send our seat's buttons and draw its snapshots
 
 import RAPIER from '@dimforge/rapier2d-compat';
@@ -143,11 +143,10 @@ function toMenu() {
     view.render(prev, curr, alpha, dt, input.state);
   };
   showPage(null);
-  refreshLandingBoard();
 }
 
 // landing leaderboard: pick a level and a crew size (one board per crew size)
-let landingCrew = 4;
+let landingCrew = 1;
 let landingLevel = RACE_LEVELS[0];
 const fmtPar = (sec) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 for (const id of RACE_LEVELS) {
@@ -239,7 +238,7 @@ function startSolo(levelId = soloLevel) {
 
 // --- online -------------------------------------------------------------------------------
 const ERRORS = {
-  'bad-name': 'Pick a name first (up to 16 characters).',
+  'bad-name': 'That name needs at least one letter.',
   'room-not-found': 'No room with that code. Check the 4 digits?',
   'room-full': 'That room already has 4 players.',
   'in-progress': "That room is mid-race. Wait for them to finish.",
@@ -267,7 +266,11 @@ const net = createNet({
 
 function showError(code) {
   if (mode === 'online') return hud.showMessage(ERRORS[code] || 'Something went wrong', '', 1600);
-  if (code === 'room-not-found' && net.hasSession()) net.clearSession(); // stale rejoin
+  if (code === 'room-not-found' && net.hasSession()) {
+    net.clearSession(); // came back to a room that's gone: nothing to tell them
+    $('landing-error').textContent = '';
+    return;
+  }
   $('landing-error').textContent = ERRORS[code] || 'Something went wrong.';
 }
 
@@ -385,9 +388,8 @@ function renderResultButtons(room) {
   $('again').style.display = isHost ? '' : 'none';
   $('again').classList.toggle('primary', !canNext);
   $('to-pond').style.display = isHost ? '' : 'none';
-  $('results-wait').textContent = isHost
-    ? next && !canNext ? '' : next ? `You unlocked level ${LEVELS[next].number}!` : 'That was the last level. For now…'
-    : 'Waiting for the host to pick what is next…';
+  $('to-pond').textContent = room.private ? 'Choose a level' : 'Back to the pond';
+  $('results-wait').textContent = isHost ? (next ? '' : 'That was the last level. For now…') : 'Waiting for the host to pick what is next…';
 }
 
 function receiveSnap(m) {
@@ -518,28 +520,24 @@ const nameInput = $('name');
 try {
   nameInput.value = localStorage.getItem('tootraft.name') || '';
 } catch {}
+// nobody should have to stop and type a name to play: there's always a fun one to start with
+const FUN_NAMES = ['Captain Toot', 'Sir Blows-a-lot', 'Gassy Gary', 'Admiral Poot', 'Rafty McRaft', 'Windy Wendy', 'Tooty Fruity', 'Baron von Toot'];
+if (!nameInput.value.trim()) nameInput.value = FUN_NAMES[(Math.random() * FUN_NAMES.length) | 0];
 function playerName() {
-  const name = nameInput.value.trim();
-  if (!name) {
-    $('landing-error').textContent = ERRORS['bad-name'];
-    nameInput.focus();
-    return null;
-  }
+  const name = nameInput.value.trim() || FUN_NAMES[0];
+  nameInput.value = name;
   try {
     localStorage.setItem('tootraft.name', name);
   } catch {}
   return name;
 }
 $('create').onclick = () => {
-  const name = playerName();
-  if (!name) return;
   net.open();
-  net.send({ t: 'create', name });
+  net.send({ t: 'create', name: playerName() });
 };
 function join() {
   const name = playerName();
   const code = $('code').value.trim();
-  if (!name) return;
   if (!/^\d{4}$/.test(code)) {
     $('landing-error').textContent = 'Room codes are 4 digits.';
     return $('code').focus();
@@ -550,12 +548,13 @@ function join() {
 $('join').onclick = join;
 $('code').addEventListener('keydown', (e) => e.key === 'Enter' && join());
 $('code').addEventListener('input', (e) => (e.target.value = e.target.value.replace(/\D/g, '').slice(0, 4)));
-$('solo').onclick = () => startSolo(RACE_LEVELS[0]);
 $('leave').onclick = leaveRoom;
 $('start').onclick = () => net.send({ t: 'start' });
 $('again').onclick = () => net.send({ t: 'start', level: online.room.result.level });
 $('next-level').onclick = () => net.send({ t: 'start', level: nextLevel(online.room.result.level) });
-$('open-levels').onclick = () => showPage('levels');
+$('play-single').onclick = () => showPage('single');
+$('play-multi').onclick = () => showPage('multi');
+$('open-board').onclick = () => showPage('board');
 $('open-history').onclick = () => showPage('history');
 
 // about popup: closes with the ×, Esc or a click outside the card
@@ -573,29 +572,33 @@ for (const b of document.querySelectorAll('[data-back]')) b.onclick = () => show
 // --- menu pages: levels and race history --------------------------------------------------
 function showPage(page) {
   setBodyClass('page-', page);
-  if (page === 'levels') renderLevelsPage();
+  $('landing-error').textContent = '';
+  if (page === 'single') renderSinglePage();
+  if (page === 'board') refreshLandingBoard();
   if (page === 'history') renderHistoryPage();
+  if (page === 'multi') playerName();
 }
 
 const typedName = () => nameInput.value.trim();
 
-async function renderLevelsPage() {
-  const name = typedName();
-  $('levels-who').textContent = name ? `Progress for ${name}` : 'Type your name on the start page to see your progress. Level 1 is always open.';
-  let prog = { cleared: {}, unlocked: [RACE_LEVELS[0]] };
+// single player: tap any level on the map, press Play
+let singlePick = null;
+async function renderSinglePage() {
+  const name = playerName();
+  let prog = { cleared: {}, unlocked: RACE_LEVELS };
   try {
-    if (name) prog = await (await fetch(`/api/progress?name=${encodeURIComponent(name)}`)).json();
+    prog = await (await fetch(`/api/progress?name=${encodeURIComponent(name)}`)).json();
   } catch {}
-  // the journey: tap a stop to see it; the raft starts on the furthest level you've reached
   const levels = RACE_LEVELS.map((id) => LEVELS[id]);
-  let selected = prog.unlocked[prog.unlocked.length - 1];
+  // start on the level you picked last, otherwise the first one you haven't finished
+  singlePick = singlePick || RACE_LEVELS.find((id) => !prog.cleared[id]) || RACE_LEVELS[0];
   const draw = () => {
     renderJourney($('levels-map'), {
-      levels, unlocked: prog.unlocked, cleared: prog.cleared, current: selected, pickable: true, fmt: fmtMs,
-      onPick: (id) => ((selected = id), draw()),
+      levels, unlocked: prog.unlocked, cleared: prog.cleared, current: singlePick, pickable: true, fmt: fmtMs,
+      onPick: (id) => ((singlePick = id), draw()),
     });
-    const L = LEVELS[selected];
-    const done = prog.cleared[selected];
+    const L = LEVELS[singlePick];
+    const done = prog.cleared[singlePick];
     const box = $('level-detail');
     box.textContent = '';
     const title = document.createElement('h3');
@@ -604,13 +607,14 @@ async function renderLevelsPage() {
     blurb.textContent = `${L.blurb} Par ${fmtPar(L.par)}.`;
     const state = document.createElement('div');
     state.className = 'state';
-    state.textContent = done
-      ? `✓ Cleared · best ${fmtMs(done.best_ms)} · ${done.best_points} pts · ${done.races} race${done.races === 1 ? '' : 's'}`
-      : 'Not finished yet';
+    state.textContent = done ? `✓ Best ${fmtMs(done.best_ms)} · ${done.best_points} pts` : 'Not finished yet';
     const play = document.createElement('button');
     play.className = 'primary';
-    play.textContent = 'Practise solo';
-    play.onclick = () => startSolo(selected);
+    play.textContent = 'Play';
+    play.onclick = () => {
+      net.open();
+      net.send({ t: 'create', name: playerName(), private: true, level: singlePick });
+    };
     box.append(title, blurb, state, play);
   };
   draw();
@@ -689,7 +693,11 @@ async function renderHistoryPage() {
     }
   }
 }
-$('to-pond').onclick = () => net.send({ t: 'lobby' });
+$('to-pond').onclick = () => {
+  if (!online.room.private) return net.send({ t: 'lobby' });
+  leaveRoom();
+  showPage('single');
+};
 
 // A hidden tab stops running frames, so tell the server we let go of everything.
 document.addEventListener('visibilitychange', () => {
@@ -705,8 +713,10 @@ document.addEventListener('visibilitychange', () => {
 // --- go -----------------------------------------------------------------------------------
 toMenu();
 if (net.hasSession()) {
-  $('landing-error').textContent = 'Rejoining your room…';
+  $('landing-error').textContent = 'Rejoining your game…';
   net.open();
+} else if (new URLSearchParams(location.search).has('practice')) {
+  startSolo(); // one person drives all four: handy for testing and screenshots (?practice)
 }
 
 // a little "still here" ping for /analytics, only while the tab is actually visible

@@ -27,7 +27,10 @@ export function createRooms({ RAPIER, db, roomTtlMs = 30_000, seatGraceMs = 10_0
   }
 
   class Room {
-    constructor() {
+    // isPrivate: single player. Still a room under the hood, so the race and scoring work the
+    // same, but nobody sees a code, there's no lobby, and nobody else can join.
+    constructor({ isPrivate = false } = {}) {
+      this.isPrivate = isPrivate;
       this.code = newCode();
       this.seats = Array(NUM_PLAYERS).fill(null); // { name, token, ws, connected, cmd, leftAt }
       this.phase = 'lobby';
@@ -54,6 +57,7 @@ export function createRooms({ RAPIER, db, roomTtlMs = 30_000, seatGraceMs = 10_0
     }
 
     addPlayer(name, ws) {
+      if (this.isPrivate && this.seated.length) return { error: 'room-not-found' };
       if (this.phase !== 'lobby') return { error: 'in-progress' };
       const seat = this.seats.findIndex((s) => !s);
       if (seat === -1) return { error: 'room-full' };
@@ -233,6 +237,7 @@ export function createRooms({ RAPIER, db, roomTtlMs = 30_000, seatGraceMs = 10_0
       const unlocked = this.unlocked();
       return {
         code: this.code,
+        private: this.isPrivate,
         phase: this.phase,
         level: this.levelId,
         choice: this.effectiveLevel(unlocked),
@@ -282,17 +287,20 @@ export function createRooms({ RAPIER, db, roomTtlMs = 30_000, seatGraceMs = 10_0
 
   return {
     rooms,
-    create: () => new Room(),
+    create: (opts) => new Room(opts),
     get: (code) => rooms.get(String(code)),
     step: () => rooms.forEach((r) => r.step()),
     // who's here right now, for /analytics
     stats() {
-      const out = { rooms: 0, inRooms: 0, racing: 0 };
+      const out = { rooms: 0, inRooms: 0, single: 0, racing: 0 };
       rooms.forEach((r) => {
         const n = r.connectedCount;
         if (!n) return;
-        out.rooms++;
-        out.inRooms += n;
+        if (r.isPrivate) out.single += n;
+        else {
+          out.rooms++;
+          out.inRooms += n;
+        }
         if (r.phase === 'countdown' || r.phase === 'race') out.racing += n;
       });
       return out;

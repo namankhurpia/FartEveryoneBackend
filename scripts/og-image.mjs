@@ -39,10 +39,9 @@ try {
   const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
   await send('Emulation.setDeviceMetricsOverride', { width: 1200, height: 630, deviceScaleFactor: 1, mobile: false }, sessionId);
   await send('Emulation.setFocusEmulationEnabled', { enabled: true }, sessionId);
-  await send('Page.navigate', { url: `http://127.0.0.1:${server.port}/?cam=close` }, sessionId);
+  await send('Page.navigate', { url: `http://127.0.0.1:${server.port}/?cam=close&practice` }, sessionId);
   await sleep(3000);
   const ev = async (e) => (await send('Runtime.evaluate', { expression: `(async()=>{${e}})()`, awaitPromise: true, returnByValue: true }, sessionId)).result?.value;
-  await ev(`document.getElementById('solo').click();`);
   // wait for GO (software rendering is slow, so go by the game's own state)
   for (let i = 0; i < 90; i++) {
     await sleep(1000);

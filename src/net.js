@@ -15,7 +15,8 @@ export function createNet({ onMessage, onStatus }) {
     wanted = true;
     if (ws && ws.readyState <= 1) return;
     onStatus('connecting');
-    ws = new WebSocket(url);
+    const sock = new WebSocket(url);
+    ws = sock;
     ws.onopen = () => {
       retry = 0;
       onStatus('online');
@@ -35,6 +36,7 @@ export function createNet({ onMessage, onStatus }) {
       onMessage(msg);
     };
     ws.onclose = () => {
+      if (ws !== sock) return; // an old connection closing after a new one has started
       ws = null;
       if (!wanted) return onStatus('offline');
       onStatus('reconnecting');

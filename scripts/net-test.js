@@ -82,18 +82,16 @@ try {
   f.send({ t: 'lobby' });
   await f.waitFor((m) => m.t === 'room' && m.room.phase === 'lobby', 3000, 'solo back to lobby');
 
-  // level 2 is locked until someone in the room has finished level 1
-  f.send({ t: 'start', level: 'plank' });
-  check((await f.waitFor((m) => m.t === 'error')).code === 'locked', 'level 2 is locked before level 1 is cleared');
+  // every level is open for now; finishing one is still tracked
   server.db.saveGame({ level: 'canal', room: f.code, players: ['Solo'], crewSize: 1, timeMs: 80000, points: 938, deaths: 0, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() });
   const prog = await (await fetch(`http://127.0.0.1:${server.port}/api/progress?name=sOLO`)).json();
-  check(!!prog.cleared.canal && prog.unlocked.join() === 'canal,plank', 'progress API: clearing level 1 unlocks level 2 (names match any case)');
+  check(!!prog.cleared.canal && prog.unlocked.join() === 'canal,plank,rapids', 'progress API: finished levels are tracked (any case), every level is open');
   f.inbox.length = 0;
   f.send({ t: 'level', level: 'plank' });
   const picked = await f.waitFor((m) => m.t === 'room' && m.room.choice === 'plank', 3000, 'level picked');
-  check(picked.room.unlocked.join() === 'canal,plank', 'room sees level 2 unlocked and the host can pick it');
-  f.send({ t: 'level', level: 'rapids' });
-  check((await f.waitFor((m) => m.t === 'error')).code === 'locked', 'level 3 still locked');
+  check(picked.room.unlocked.join() === 'canal,plank,rapids', 'room can pick any level');
+  f.send({ t: 'level', level: 'nope' });
+  check((await f.waitFor((m) => m.t === 'error')).code === 'bad-level', 'a made-up level is refused');
   f.send({ t: 'start' });
   const lvl2 = await f.waitFor((m) => m.t === 'room' && m.room.phase === 'countdown', 3000, 'level 2 countdown');
   check(lvl2.room.level === 'plank', 'race starts on the picked level');
@@ -116,11 +114,24 @@ try {
   await fetch(api + '/og.jpg', browser);
   await fetch(api + '/api/ping?id=testtab01&mode=solo', { method: 'POST' });
   const stats = await (await fetch(api + '/api/analytics')).json();
-  check(stats.now.inRooms === 4 && stats.now.rooms === 1 && stats.now.solo === 1 && stats.now.onSite === 5, 'analytics: live counts of players in rooms and solo tabs');
+  check(stats.now.inRooms === 4 && stats.now.rooms === 1 && stats.now.single === 1 && stats.now.onSite === 5, 'analytics: live counts of players in rooms and solo tabs');
   check(stats.totalViews === 2 && stats.totalVisitors === 1, 'analytics: 2 views by 1 visitor; the bot and image requests are not counted');
   check(stats.days[0].views === 2 && stats.days[0].peak >= 5, 'analytics: per-day numbers and peak');
   const page = await fetch(api + '/analytics');
   check(page.status === 200 && (await page.text()).includes('noindex') , '/analytics page is served and kept out of search results');
+
+  // single player: straight into a race on the chosen level, no lobby, and nobody can join
+  const g = client('G');
+  await g.open;
+  g.send({ t: 'create', name: 'Lone', private: true, level: 'rapids' });
+  const lone = await g.waitFor((m) => m.t === 'room' && m.room.phase === 'countdown', 3000, 'single player countdown');
+  check(lone.room.private && lone.room.level === 'rapids' && lone.room.seats.filter(Boolean).length === 1, 'single player starts straight away on the chosen level');
+  const snoop = client('S');
+  await snoop.open;
+  snoop.send({ t: 'join', name: 'Snoop', code: g.code });
+  check((await snoop.waitFor((m) => m.t === 'error')).code === 'room-not-found', 'nobody can join a single player game');
+  await snoop.close();
+  await g.close();
 
   // a tab that goes quiet mid-fart (backgrounded, phone switched apps) must stop farting
   c.send({ t: 'input', fart: true, move: 0, aim: 0 });

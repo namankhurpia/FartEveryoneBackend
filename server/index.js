@@ -54,7 +54,7 @@ export async function startServer({
       }
     }
     const r = rooms.stats();
-    return { onSite: Math.max(onSite, r.inRooms + solo), solo, ...r };
+    return { onSite: Math.max(onSite, r.inRooms + r.single + solo), ...r, single: r.single + solo };
   }
   const BOTS = /bot|crawl|spider|slurp|preview|facebookexternalhit|whatsapp|telegram|discord|curl|wget|python|node|go-http|axios|headless|lighthouse|monitor|scan/i;
   function countVisit(req) {
@@ -175,8 +175,12 @@ export async function startServer({
         const name = cleanName(msg.name);
         if (!name) return fail('bad-name');
         if (msg.t === 'create') {
-          const r = rooms.create();
-          return seated(r, r.addPlayer(name, ws));
+          const isPrivate = msg.private === true; // single player: straight into the race
+          const r = rooms.create({ isPrivate });
+          const res = r.addPlayer(name, ws);
+          seated(r, res);
+          if (isPrivate && !res.error) r.start(res.seat, typeof msg.level === 'string' ? msg.level : undefined);
+          return;
         }
         const r = rooms.get(String(msg.code || '').trim());
         return r ? seated(r, r.addPlayer(name, ws)) : fail('room-not-found');

@@ -55,63 +55,97 @@
     </noscript>
     <div id="game"></div>
 
-    <!-- landing: name, create / join, solo, leaderboard -->
+    <!-- home: your name and the two ways to play -->
     <section id="landing" class="screen">
-      <div class="card landing-card">
+      <div class="card home-card">
         <h1>Bottoms Up!</h1>
-        <p class="tagline">Up to four friends. One round raft. Only farts for power.</p>
+        <p class="tagline">One round raft. Only farts for power.</p>
 
-        <label class="field">
-          <span>Your name</span>
-          <input id="name" maxlength="16" autocomplete="nickname" placeholder="e.g. Captain Toot" />
+        <div class="play-buttons">
+          <button id="play-single" class="play-btn single">
+            <span class="play-title">Single player</span>
+            <span class="play-sub">Just you and the raft</span>
+          </button>
+          <button id="play-multi" class="play-btn multi">
+            <span class="play-title">Multiplayer</span>
+            <span class="play-sub">Play with up to 3 friends</span>
+          </button>
+        </div>
+
+        <label class="name-field">
+          <span>Playing as</span>
+          <input id="name" maxlength="16" autocomplete="nickname" aria-label="Your name" />
         </label>
 
-        <div class="actions">
-          <button id="create" class="primary">Create a room</button>
-          <div class="join">
-            <input id="code" inputmode="numeric" maxlength="4" placeholder="Code" aria-label="4-digit room code" />
-            <button id="join">Join</button>
-          </div>
-        </div>
-        <p id="landing-error" class="error" role="alert"></p>
-        <div class="nav-row">
-          <button id="open-levels">Levels</button>
-          <button id="open-history">Race history</button>
-          <button id="solo" class="link">or practise solo</button>
-          <a class="link-a" href="/about.html">How to play</a>
-        </div>
-
-        <div class="board">
-          <div class="board-head">
-            <select id="board-level" aria-label="Leaderboard level"></select>
-            <span class="small" id="board-par"></span>
-          </div>
-          <div id="crew-tabs" class="tabs" role="tablist" aria-label="Crew size">
-            <button data-crew="1">Solo</button>
-            <button data-crew="2">2 players</button>
-            <button data-crew="3">3 players</button>
-            <button data-crew="4" class="on">4 players</button>
-          </div>
-          <table id="landing-board" class="board-table"></table>
-        </div>
+        <nav class="home-links">
+          <button id="open-board" class="link">Leaderboard</button>
+          <button id="open-history" class="link">Race history</button>
+          <a href="/about.html">How to play</a>
+        </nav>
       </div>
     </section>
 
-    <!-- levels: progress for your name, unlock rules, solo practice per level -->
-    <section id="levels-page" class="screen page">
+    <!-- single player: pick any level and go -->
+    <section id="single-page" class="screen page">
       <div class="card page-card">
         <div class="page-head">
           <button class="back" data-back>← Back</button>
-          <h2>Levels</h2>
+          <h2>Choose a level</h2>
         </div>
-        <p class="small" id="levels-who"></p>
         <div class="levels-layout">
           <div id="levels-map"></div>
           <div id="level-detail" class="level-detail"></div>
         </div>
-        <p class="small">To race a level with friends, create a room and the host picks it in the lobby. Finishing a level (with any number of players) unlocks the next one for everyone in that crew.</p>
       </div>
     </section>
+
+    <!-- multiplayer: start a room or join one -->
+    <section id="multi-page" class="screen page">
+      <div class="card page-card multi-card">
+        <div class="page-head">
+          <button class="back" data-back>← Back</button>
+          <h2>Multiplayer</h2>
+        </div>
+        <div class="multi-options">
+          <div class="multi-option">
+            <h3>Start a room</h3>
+            <p class="small">You get a 4-digit code to share. When your friends are in, you pick the level and start.</p>
+            <button id="create" class="primary">Create room</button>
+          </div>
+          <div class="multi-option">
+            <h3>Join a friend</h3>
+            <p class="small">Got a code? Type it in here.</p>
+            <div class="join">
+              <input id="code" inputmode="numeric" maxlength="4" placeholder="Code" aria-label="4-digit room code" />
+              <button id="join" class="primary">Join</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- leaderboard: pick a level and a crew size -->
+    <section id="board-page" class="screen page">
+      <div class="card page-card">
+        <div class="page-head">
+          <button class="back" data-back>← Back</button>
+          <h2>Leaderboard</h2>
+        </div>
+        <div class="board-head">
+          <select id="board-level" aria-label="Level"></select>
+          <span class="small" id="board-par"></span>
+        </div>
+        <div id="crew-tabs" class="tabs" role="tablist" aria-label="Crew size">
+          <button data-crew="1" class="on">Solo</button>
+          <button data-crew="2">2 players</button>
+          <button data-crew="3">3 players</button>
+          <button data-crew="4">4 players</button>
+        </div>
+        <table id="landing-board" class="board-table"></table>
+      </div>
+    </section>
+
+    <p id="landing-error" class="menu-error" role="alert"></p>
 
     <!-- race history: how many races, and the recent ones -->
     <section id="history-page" class="screen page">
@@ -156,11 +190,11 @@
       <div class="card lobby-card">
         <div class="code-label">Room code</div>
         <div id="room-code" class="room-code">----</div>
-        <p class="small">Send this code to up to 3 friends. The raft is split evenly between everyone on it, and the host can start with 1 to 4 players.</p>
+        <p class="small">Send this code to your friends. The host starts the race when everyone's in.</p>
         <ol id="seats" class="seats"></ol>
         <p id="lobby-status" class="status-line"></p>
         <button id="start" class="primary" disabled>Start race</button>
-        <div class="code-label journey-label">Your journey <span class="pick-hint">(host taps a level)</span></div>
+        <div class="code-label journey-label">Your journey <span class="pick-hint">(host picks)</span></div>
         <div id="level-pick"></div>
         <p class="small hint">While you wait, paddle around the pond: <kbd>Space</kbd> to fart, <kbd>A</kbd> <kbd>D</kbd> or <kbd>←</kbd> <kbd>→</kbd> to walk left / right.</p>
       </div>

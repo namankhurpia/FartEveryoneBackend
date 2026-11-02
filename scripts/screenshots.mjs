@@ -96,7 +96,7 @@ try {
   await host.shot('start.png');
 
   // 2. levels page and race history
-  await host.eval(`document.getElementById('open-levels').click();`);
+  await host.eval(`document.getElementById('play-single').click();`);
   await sleep(1200);
   await host.shot('levels.png');
   await host.eval(`document.querySelector('#levels-page [data-back]').click(); document.getElementById('open-history').click();`);
@@ -133,9 +133,9 @@ try {
   for (const [i, file, x, y] of [[1, 'level2.png', 0, 30], [2, 'level3.png', 76, 40]]) {
     const t = await openTab();
     await t.go(base);
-    await t.eval(`document.getElementById('name').value = 'Naman'; document.getElementById('open-levels').click();`);
+    await t.eval(`document.getElementById('name').value = 'Naman'; document.getElementById('play-single').click();`);
     await sleep(1200);
-    await t.eval(`document.querySelectorAll('#levels-map .stop')[${i}].click(); document.querySelector('#level-detail button').click();`);
+    await t.go(base + '/?practice');
     await sleep(4300);
     await t.eval(`document.getElementById('help').classList.add('hidden'); __toot.sim.debugPlace(${x}, ${y}, 0);`);
     await sleep(1500);
@@ -144,8 +144,7 @@ try {
 
   // 6. a close-up of the raft and crew
   const close = await openTab();
-  await close.go(base + '/?cam=close');
-  await close.eval(`document.getElementById('solo').click();`);
+  await close.go(base + '/?cam=close&practice');
   await sleep(4500);
   for (const k of ['KeyC', 'KeyV']) await close.key(k);
   await sleep(500);

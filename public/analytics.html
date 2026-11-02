@@ -70,10 +70,10 @@
           const d = await (await fetch('/api/analytics')).json();
           tiles(document.getElementById('now'), [
             [d.now.onSite, 'on the site', true],
-            [d.now.inRooms, 'in rooms', true],
+            [d.now.single, 'single player', true],
+            [d.now.inRooms, 'multiplayer', true],
+            [d.now.rooms, 'multiplayer rooms', true],
             [d.now.racing, 'racing', true],
-            [d.now.solo, 'in solo practice', true],
-            [d.now.rooms, 'active rooms', true],
           ]);
           tiles(document.getElementById('all'), [
             [d.totalVisitors, 'unique visitors'],

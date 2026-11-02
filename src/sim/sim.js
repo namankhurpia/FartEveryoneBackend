@@ -350,7 +350,7 @@ export function createSim(RAPIER, level = LEVELS.canal, { crew = ALL_SEATS } = {
     // wells: holes in the track. Let the raft's centre over one and it's gone
     if (level.wells && (state.phase === 'playing' || state.phase === 'ready')) {
       const at = raft.translation();
-      if (level.wells.some((w) => Math.hypot(at.x - w.x, at.y - w.y) < w.r)) startRespawn('fell', events);
+      if (level.wells.some((w) => Math.hypot(at.x - w.x, at.y - w.y) < w.r)) startRespawn('hole', events);
     }
 
     world.intersectionPairsWith(raftCollider, (other) => {
@@ -374,7 +374,7 @@ export function createSim(RAPIER, level = LEVELS.canal, { crew = ALL_SEATS } = {
     return events;
   }
 
-  // cause: 'spike' (splat) or 'fell' (off the edge). Back to the last checkpoint after a beat.
+  // cause: 'spike' (splat), 'fell' (off the edge) or 'hole' (down one). Back to the last checkpoint after a beat.
   function startRespawn(cause, events) {
     state.phase = 'respawning';
     state.respawnTimer = RESPAWN_TICKS;
@@ -384,7 +384,7 @@ export function createSim(RAPIER, level = LEVELS.canal, { crew = ALL_SEATS } = {
       if (p.farting) events.push({ type: 'fartEnd', player: i });
       p.farting = false;
     });
-    events.push({ type: cause === 'fell' ? 'fell' : 'ouch' });
+    events.push(cause === 'spike' ? { type: 'ouch' } : { type: 'fell', hole: cause === 'hole' });
   }
 
   function snapshot() {

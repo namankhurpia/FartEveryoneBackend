@@ -113,7 +113,7 @@ function commonEvents(events) {
       hud.showMessage('SPLAT!', 'Back to the checkpoint…', 1100);
     } else if (e.type === 'fell') {
       audio.fall();
-      hud.showMessage('Off the edge!', 'Back to the checkpoint…', 1200);
+      hud.showMessage(e.hole ? 'Down the hole!' : 'Off the edge!', 'Back to the checkpoint…', 1200);
     } else if (e.type === 'finish') {
       view.confetti(200);
     } else if (e.type === 'respawned') {

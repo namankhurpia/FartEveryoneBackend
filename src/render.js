@@ -459,8 +459,8 @@ export function createRenderer(container) {
     });
 
     // --- holes in the track: plain dark holes with a stone lip. Everything within reach of their
-    // pull is drawn on the water: it darkens as it slopes in, with ripples and streaks running
-    // towards the hole, so you can see how far the pull goes.
+    // pull is drawn on the water: it darkens as it slopes in, with arrows sliding straight towards
+    // the hole, so you can see how far the pull goes and which way it drags you.
     let holeMat = null;
     if (level.wells?.length) {
       const pos = [];
@@ -480,6 +480,9 @@ export function createRenderer(container) {
             const mx = w.x + (p00[0] + p11[0]) / 2;
             const my = w.y + (p00[1] + p11[1]) / 2;
             if (level.water && !onWater(level, mx, my)) continue;
+            // two holes close together share the water between them, so their arrows never overlap
+            const edge = (o) => Math.hypot(mx - o.x, my - o.y) - o.r;
+            if (i > 2 && level.wells.some((o) => o !== w && edge(o) < edge(w) - 0.3)) continue;
             for (const [lx, ly] of [p00, p10, p11, p00, p11, p01]) {
               pos.push(w.x + lx, 0.04, -(w.y + ly));
               local.push(lx, ly);
@@ -516,23 +519,20 @@ export function createRenderer(container) {
           void main() {
             float d = length(vL);
             if (d < vLip) {
-              // the hole: black at the bottom, the far wall catching a little light
-              float wall = smoothstep(0.45, 1.05, length(vL / vLip + vec2(0.0, 0.42)));
-              gl_FragColor = vec4(mix(vec3(0.015, 0.02, 0.03), vec3(0.2, 0.2, 0.21), wall), 1.0);
+              // the hole: nearly black, with just the far wall catching a little light
+              float wall = smoothstep(0.7, 1.0, length(vL / vLip + vec2(0.0, 0.2)));
+              gl_FragColor = vec4(mix(vec3(0.01, 0.012, 0.018), vec3(0.14, 0.14, 0.15), wall), 1.0);
             } else {
               float e = clamp((d - vLip) / uRange, 0.0, 1.0); // 0 at the lip, 1 where the pull ends
               float near = 1.0 - e;
-              float t = uTime * uSpeed;
-              float a = atan(vL.y, vL.x);
-              // rings closing in on the hole, and curved streaks being dragged round into it
-              float rf = fract(e * 3.0 + t);
-              float ring = smoothstep(0.0, 0.1, rf) * smoothstep(0.34, 0.1, rf);
-              float sf = fract(a / 6.2832 * 5.0 + e * 1.6 + t * 1.5);
-              float streak = smoothstep(0.0, 0.05, sf) * smoothstep(0.22, 0.05, sf);
-              float white = max(ring * 0.75, streak * 0.55) * smoothstep(0.0, 0.25, near);
-              float dark = near * near * 0.75;
-              vec3 c = mix(vec3(0.02, 0.1, 0.2), vec3(0.92, 0.98, 1.0), white / max(white + dark, 0.001));
-              gl_FragColor = vec4(c, clamp(max(dark, white * (0.25 + near * 0.6)), 0.0, 1.0));
+              // rows of arrows pointing straight at the hole, sliding in
+              float cu = fract(atan(vL.y, vL.x) / 6.2832 * 10.0) - 0.5;
+              float cv = fract(e * 1.6 + uTime * uSpeed) - abs(cu) * 0.55;
+              float arrow = smoothstep(0.0, 0.03, cv) * smoothstep(0.13, 0.1, cv) * smoothstep(0.3, 0.25, abs(cu));
+              float white = arrow * smoothstep(0.0, 0.18, e) * smoothstep(1.0, 0.75, e) * 0.8;
+              float dark = near * near * 0.6;
+              vec3 c = mix(vec3(0.02, 0.1, 0.2), vec3(0.95, 0.98, 1.0), white / max(white + dark, 0.001));
+              gl_FragColor = vec4(c, clamp(max(dark, white), 0.0, 1.0));
             }
             #include <colorspace_fragment>
           }`,
@@ -807,6 +807,7 @@ export function createRenderer(container) {
     scenery = built.scenery;
     ducks = built.ducks;
     ducks.holes = level.wells || [];
+    ducks.level = level;
     duckMesh.count = Math.min(ducks.length, MAX_DUCKS);
     duckMesh.visible = ducks.length > 0;
     scene.add(levelGroup);
@@ -1140,15 +1141,17 @@ export function createRenderer(container) {
       const d = ducks[i];
       let x, y, angle, h, size;
       if (d.hole) {
-        // round and round, faster and closer, then down the hole and back to the start
-        const f = (time / 7 + d.phase) % 1;
-        const r = d.hole.r + WELL_PULL_RANGE * (1 - f) ** 1.4;
-        const a = d.phase * 6.28 + 9 * f * f + 2 * f;
+        // sliding straight in, faster and faster, then down the hole and in again from somewhere else
+        const cycle = time / 5 + d.phase;
+        const f = cycle % 1;
+        const a = d.phase * 6.28 + Math.floor(cycle) * 2.4;
+        const r = d.hole.r + WELL_PULL_RANGE * (1 - f * f);
         x = d.hole.x + Math.cos(a) * r;
         y = d.hole.y + Math.sin(a) * r;
-        angle = a + Math.PI / 2 + 0.4;
-        size = Math.min(1, f * 8) * (f > 0.92 ? (1 - f) / 0.08 : 1);
-        h = f > 0.92 ? -0.5 * ((f - 0.92) / 0.08) : Math.sin(time * 3 + d.phase * 9) * 0.04;
+        angle = a + Math.PI + Math.sin(time * 5 + d.phase * 9) * 0.25; // facing it, wobbling
+        size = Math.min(1, f * 8) * (f > 0.9 ? (1 - f) / 0.1 : 1);
+        if (!onWater(ducks.level, x, y)) size = 0; // only on the water, never out over the drop
+        h = Math.sin(time * 3 + d.phase * 9) * 0.04;
       } else {
         const s = (d.s + time * 1.4) % d.channel.length;
         const p = along(d.channel, s, d.lat);
@@ -1213,6 +1216,15 @@ export function createRenderer(container) {
     const drop = curr.cause === 'fell' ? -16 * (1 - curr.respawn) ** 2 : 0;
     raft.position.copy(toWorld(rx, ry, Math.sin(time * 2.2) * 0.04 + drop));
     raft.rotation.y = ra;
+    // down a hole: dragged to the middle of it, spinning, and gone
+    raft.scale.setScalar(1);
+    if (curr.cause === 'hole') {
+      const k = Math.min(1, (1 - curr.respawn) * 1.6);
+      const w = ducks.holes.reduce((a, b) => (Math.hypot(b.x - rx, b.y - ry) < Math.hypot(a.x - rx, a.y - ry) ? b : a));
+      raft.position.copy(toWorld(lerp(rx, w.x, k), lerp(ry, w.y, k), 0.06));
+      raft.rotation.y = ra + k * k * 7;
+      raft.scale.setScalar(Math.max(0.001, 1 - k * k));
+    }
     raftNow.copy(raft.position).setY(1);
     deck.rotation.x = Math.sin(time * 1.7) * 0.025;
     deck.rotation.z = Math.cos(time * 1.3) * 0.025;

@@ -105,6 +105,7 @@ function commonEvents(events) {
   for (const e of events) {
     if (e.type === 'checkpoint') {
       audio.checkpoint();
+      view.confetti(40);
       hud.showMessage('Checkpoint!', '', 1200);
     } else if (e.type === 'ouch') {
       audio.ouch();
@@ -113,6 +114,8 @@ function commonEvents(events) {
     } else if (e.type === 'fell') {
       audio.fall();
       hud.showMessage('Off the edge!', 'Back to the checkpoint…', 1200);
+    } else if (e.type === 'finish') {
+      view.confetti(200);
     } else if (e.type === 'respawned') {
       view.snapCamera();
     }
@@ -745,6 +748,7 @@ requestAnimationFrame(frame);
 
 // Handle for debugging / automated checks in the console.
 window.__toot = {
+  view,
   input, online, net,
   get mode() { return mode; },
   get sim() { return local && local.sim; },

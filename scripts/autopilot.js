@@ -17,7 +17,7 @@ export function drive(RAPIER, level, crewSize, style, { log = () => {}, maxSecon
   const sim = createSim(RAPIER, level, { crew: [0, 1, 2, 3].slice(0, crewSize) });
   const pilot = createPilot(level, style);
   let events = [];
-  // progress = how far along the route we've got; no progress for 15 s means we're pinned or
+  // progress = how far along the route we've got; no progress for 40 s means we're pinned or
   // being batted about, so do what a player would: press R (back to the last checkpoint)
   const path = route(level.route, 1); // a point every metre, so progress shows up on long stretches too
   const along = (s) => {
@@ -34,7 +34,7 @@ export function drive(RAPIER, level, crewSize, style, { log = () => {}, maxSecon
     if (s.phase === 'finished') break;
     const a = along(s);
     if (a > bestAlong) [bestAlong, bestAt] = [a, t];
-    else if (t - bestAt > 15 * 60 && s.phase === 'playing') {
+    else if (t - bestAt > 40 * 60 && s.phase === 'playing') {
       sim.respawn();
       [bestAlong, bestAt] = [-1, t]; // measure progress afresh from the checkpoint
     }

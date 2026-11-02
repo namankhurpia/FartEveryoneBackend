@@ -1,7 +1,8 @@
 // Headless sanity check of the sim with everyone facing the centre by default.
 import RAPIER from '@dimforge/rapier2d-compat';
-import { WALK_SPEED, arcFor, createSim, DT, FACE_CENTER, NUM_PLAYERS, walkToward } from '../src/sim/sim.js';
+import { RAFT, WALK_SPEED, arcFor, createSim, DT, FACE_CENTER, NUM_PLAYERS, walkToward } from '../src/sim/sim.js';
 import { LEVELS } from '../src/sim/levels.js';
+import { along, onWater } from '../src/sim/track.js';
 
 await RAPIER.init();
 
@@ -153,25 +154,74 @@ for (const id of ['plank', 'rapids']) {
   };
   check(hit('wells', -3, 12).includes('fell'), 'dropping into a well is a fall');
   check(!hit('wells', 3, 12).includes('fell'), 'beside a well is safe');
-  check(hit('inferno', 0, 28.5).includes('ouch'), 'touching a spike circle is a splat');
-  check(!hit('inferno', 0, 22).includes('ouch'), 'the middle of a spike circle is safe');
-  check(!hit('inferno', 0, 15.5).includes('ouch'), 'an opening in a spike circle is safe');
+  // first spike circle: at time 0 its openings point east and west, so north of it is solid
+  const circle = LEVELS.inferno.movers[0];
+  check(hit('inferno', circle.x, circle.y + circle.r, 1).includes('ouch'), 'touching a spike circle is a splat');
+  check(!hit('inferno', circle.x, circle.y, 1).includes('ouch'), 'the middle of a spike circle is safe');
+  check(!hit('inferno', circle.x + circle.r, circle.y, 1).includes('ouch'), 'an opening in a spike circle is safe');
   // windmill: at time 0 arm 0 points east, so just east of the tower is on it
   check(hit('windmills', 3.5, 28, 1).includes('ouch'), 'touching a windmill arm is a splat');
   check(!hit('windmills', 0, 18, 1).includes('ouch'), 'out of reach of a windmill is safe');
-  // the river pushes all the time, the same everywhere
-  const sim = createSim(RAPIER, LEVELS.inferno);
-  sim.go();
-  for (let t = 0; t < 30; t++) sim.step([]);
-  check(sim.snapshot().raft.vx > 0.3, 'the river pushes the raft along with nobody farting');
-  sim.free();
+  // the river carries you along the channel, and out towards the edge on a bend
+  {
+    const L = LEVELS.inferno;
+    const sim = createSim(RAPIER, L);
+    sim.go();
+    const a = along(L.water[1], 30);
+    for (let t = 0; t < 140; t++) {
+      if (t < 100) sim.debugPlace(a.x, a.y, 0); // held still, then let go
+      sim.step([]);
+    }
+    const s = sim.snapshot();
+    const fwd = s.raft.vx * Math.cos(a.angle) + s.raft.vy * Math.sin(a.angle);
+    const left = -s.raft.vx * Math.sin(a.angle) + s.raft.vy * Math.cos(a.angle);
+    check(s.phase === 'playing' && fwd > 0.2 && left < -0.1, 'the river pushes the raft along and out of the bend, with nobody farting');
+    sim.free();
+    // the start pool is still: nobody gets swept away while they work out the controls
+    {
+      const calm = createSim(RAPIER, L, { crew: [0] });
+      calm.go();
+      for (let t = 0; t < 300; t++) calm.step([]);
+      check(Math.hypot(calm.snapshot().raft.vx, calm.snapshot().raft.vy) < 0.01, 'the start pool is still water');
+      calm.free();
+    }
+    // a lone player's first fart goes the way the river goes, not over the edge
+    {
+      const first = createSim(RAPIER, L, { crew: [0] });
+      for (let t = 0; t < 90; t++) first.step(Array.from({ length: NUM_PLAYERS }, (_, i) => ({ aim: 0, fart: i === 0 })));
+      const s0 = first.snapshot();
+      check(s0.phase === 'playing' && s0.deaths === 0 && s0.raft.x - L.checkpoints[0].x > 1.5, 'inferno: holding fart alone at the start heads down the river');
+      first.free();
+    }
+    // spinning spike circles fill the channel: the edge of the water is still within their reach
+    for (const m of L.movers.filter((x) => x.type === 'ring')) {
+      const inside = [];
+      for (let k = 0; k < 360; k += 5) {
+        const px = m.x + Math.cos((k * Math.PI) / 180) * (m.r + RAFT.radius + 0.1);
+        const py = m.y + Math.sin((k * Math.PI) / 180) * (m.r + RAFT.radius + 0.1);
+        inside.push(onWater(L, px, py));
+      }
+      check(inside.filter(Boolean).length < 72 && m.speed !== 0, `spike circle at (${m.x.toFixed(0)}, ${m.y.toFixed(0)}) spins and can't be gone round`);
+    }
+    // no checkpoint inside the reach of anything moving
+    const reach = (m) => (m.type === 'ring' ? m.r : m.radius) + RAFT.radius + 0.6;
+    check(L.checkpoints.every((c) => L.movers.every((m) => Math.hypot(c.x - m.x, c.y - m.y) > reach(m))), 'inferno: checkpoints are out of reach of the spinning things');
+    // the channel's turns are clearly apart, so nobody can hop across to skip a lap
+    const pts = L.water[1].path;
+    let closest = Infinity;
+    pts.forEach(([x, y], i) => pts.forEach(([u, v], j) => {
+      if (j - i > 60) closest = Math.min(closest, Math.hypot(x - u, y - v));
+    }));
+    check(closest > 2 * L.water[1].hw + 2, `inferno: turns of the spiral stay apart (${closest.toFixed(1)} m between middles)`);
+    check(L.water[1].length > 350, `inferno: long (${L.water[1].length} m)`);
+  }
   for (const id of ['windmills', 'wells', 'inferno']) {
     const L = LEVELS[id];
-    const onWater = ([x, y]) => L.water.some((r) => Math.abs(x - r.x) <= r.w / 2 && Math.abs(y - r.y) <= r.h / 2);
+    const water = ([x, y]) => onWater(L, x, y);
     const inWell = ([x, y], pad = 0) => (L.wells || []).some((w) => Math.hypot(x - w.x, y - w.y) < w.r + pad);
     const spots = [...L.checkpoints.map((c) => [c.x, c.y]), [L.finish.x, L.finish.y]];
-    check(spots.every(onWater) && !spots.some((p) => inWell(p, 1)), `${id}: checkpoints and finish are on water, clear of wells`);
-    check(L.route.every(onWater) && !L.route.some((p) => inWell(p)), `${id}: the route stays on the water and out of the wells`);
+    check(spots.every(water) && !spots.some((p) => inWell(p, 1)), `${id}: checkpoints and finish are on water, clear of wells`);
+    check(L.route.every(water) && !L.route.some((p) => inWell(p)), `${id}: the route stays on the water and out of the wells`);
     check(L.number === 3 + ['windmills', 'wells', 'inferno'].indexOf(id) + 1, `${id}: level number is right`);
   }
 }

@@ -1,4 +1,4 @@
-// Level 5: "Hell's Wells". A long raised track with no walls and glowing holes in the middle of
+// Level 5: "The Holey Road". A long raised track with no walls and plain holes in the middle of
 // it. They pull you in as you get close, and if the raft's centre goes over one it's gone. The
 // lanes between them get narrower, then the track turns east and a crosswind joins in.
 
@@ -7,8 +7,8 @@ import { route } from './route.js';
 export const WELLS = {
   id: 'wells',
   number: 5,
-  name: "Hell's Wells",
-  blurb: 'Holes in the track, open all the way to hell, and they pull you in. Then a crosswind joins in.',
+  name: 'The Holey Road',
+  blurb: 'Big holes in the track that drag you in if you get close. Then a crosswind joins in.',
   par: 120,
 
   water: [

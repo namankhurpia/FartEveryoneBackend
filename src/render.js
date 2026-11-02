@@ -2,18 +2,141 @@
 // Sim (x, y) maps to three (x, height, -y); sim angle maps to rotation.y.
 
 import * as THREE from 'three';
-import { ALL_SEATS, NUM_PLAYERS, RAFT, RING_THICK, WINDMILL_ARM, WINDMILL_TOWER, arcFor, ringSegments, seatAt } from './sim/sim.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { ALL_SEATS, NUM_PLAYERS, RAFT, RING_THICK, WELL_PULL, WELL_PULL_RANGE, WINDMILL_ARM, WINDMILL_TOWER, arcFor, ringSegments, seatAt } from './sim/sim.js';
+import { along, inWater, onWater } from './sim/track.js';
 
 export const PLAYER_COLORS = ['#ff5a5f', '#3fa7ff', '#ffc93c', '#5ad16a'];
 const DECK_Y = 0.42; // the crew sit on the raft's tube
 const CREW_SCALE = 0.85; // a little smaller than the raft's tube is wide, so they look seated in it
+const MAX_PIXEL_RATIO = 1.75; // a sharp picture, without drawing 5 million pixels on a retina laptop
+const SLOW_FRAME_MS = 23; // slower than about 43 fps: draw fewer pixels until it's smooth
+
+// Many small meshes become one per material, which is far cheaper to draw: anything that doesn't
+// move on its own. Children marked userData.noBatch are left alone.
+function batch(root) {
+  root.updateMatrixWorld(true);
+  const toRoot = root.matrixWorld.clone().invert();
+  const groups = new Map();
+  const walk = (o) => {
+    for (const c of o.children) {
+      if (c.userData.noBatch) continue;
+      if (c.isMesh && !c.isInstancedMesh && !Array.isArray(c.material) && !c.children.length) {
+        const g = c.geometry;
+        const key = `${c.material.uuid}|${c.castShadow}|${c.receiveShadow}|${!!g.index}|${Object.keys(g.attributes).sort()}`;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(c);
+      }
+      walk(c);
+    }
+  };
+  walk(root);
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    const parts = list.map((m) => m.geometry.clone().applyMatrix4(new THREE.Matrix4().multiplyMatrices(toRoot, m.matrixWorld)));
+    const merged = mergeGeometries(parts);
+    for (const g of parts) g.dispose();
+    if (!merged) continue;
+    const old = new Set(list.map((m) => m.geometry));
+    for (const m of list) m.removeFromParent();
+    for (const g of old) g.dispose();
+    const out = new THREE.Mesh(merged, list[0].material);
+    out.castShadow = list[0].castShadow;
+    out.receiveShadow = list[0].receiveShadow;
+    root.add(out);
+  }
+}
+
+// A flat band following a line of points, from `a` to `b` metres left of it, at height h. keep(x, y)
+// can drop bits of it. Along the band the texture repeats every `tile` metres.
+function band(path, a, b, h, { keep = () => true, tile = 2.5 } = {}) {
+  const pos = [];
+  const uv = [];
+  const index = [];
+  let dist = 0;
+  path.forEach(([x, y], i) => {
+    const [x0, y0] = path[Math.max(0, i - 1)];
+    const [x1, y1] = path[Math.min(path.length - 1, i + 1)];
+    const len = Math.hypot(x1 - x0, y1 - y0) || 1;
+    const nx = -(y1 - y0) / len;
+    const ny = (x1 - x0) / len;
+    if (i) dist += Math.hypot(x - x0, y - y0);
+    pos.push(x + nx * a, h, -(y + ny * a), x + nx * b, h, -(y + ny * b));
+    uv.push(0, -dist / tile, 1, -dist / tile);
+    if (i && keep((x + x0) / 2 + nx * (a + b) / 2, (y + y0) / 2 + ny * (a + b) / 2)) {
+      const k = i * 2;
+      index.push(k - 2, k, k - 1, k - 1, k, k + 1);
+    }
+  });
+  return flatGeometry(pos, uv, index);
+}
+
+// a straight-down side wall along a line of points, `lat` metres left of it
+function wall(path, lat, top, bottom, keep = () => true) {
+  const pos = [];
+  const uv = [];
+  const index = [];
+  path.forEach(([x, y], i) => {
+    const [x0, y0] = path[Math.max(0, i - 1)];
+    const [x1, y1] = path[Math.min(path.length - 1, i + 1)];
+    const len = Math.hypot(x1 - x0, y1 - y0) || 1;
+    const px = x - ((y1 - y0) / len) * lat;
+    const py = y + ((x1 - x0) / len) * lat;
+    pos.push(px, top, -py, px, bottom, -py);
+    uv.push(0, 0, 0, 1);
+    if (i && keep(px, py)) {
+      const k = i * 2;
+      index.push(k - 2, k - 1, k, k - 1, k + 1, k);
+    }
+  });
+  const g = flatGeometry(pos, uv, index);
+  g.computeVertexNormals();
+  return g;
+}
+
+function flatGeometry(pos, uv, index) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(pos.flatMap((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(index);
+  return g;
+}
+
+const circlePath = (r, n = 64) =>
+  Array.from({ length: n + 1 }, (_, i) => [r.x + Math.cos((i / n) * 2 * Math.PI) * r.r, r.y + Math.sin((i / n) * 2 * Math.PI) * r.r]);
+
+// paint one colour onto a geometry, so differently coloured parts can share a material
+function painted(geo, color, place) {
+  const g = geo.index ? geo.toNonIndexed() : geo;
+  if (place) g.applyMatrix4(place);
+  const c = new THREE.Color(color);
+  const n = g.attributes.position.count;
+  g.setAttribute('color', new THREE.Float32BufferAttribute(Array.from({ length: n * 3 }, (_, i) => [c.r, c.g, c.b][i % 3]), 3));
+  return g;
+}
+const at = (x, y, z, sx = 1, sy = sx, sz = sx) => new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion(), new THREE.Vector3(sx, sy, sz));
+
+// A rubber duck, facing +x. Purely for looks: they ride the river and get sucked into the holes.
+function duckGeometry() {
+  const parts = [
+    painted(new THREE.SphereGeometry(0.45, 8, 6), '#ffd92e', at(0, 0.28, 0, 1.25, 0.8, 0.95)),
+    painted(new THREE.SphereGeometry(0.28, 8, 6), '#ffd92e', at(0.36, 0.72, 0)),
+    painted(new THREE.ConeGeometry(0.12, 0.3, 6).rotateZ(-Math.PI / 2), '#ff7a1a', at(0.72, 0.68, 0)),
+    painted(new THREE.ConeGeometry(0.14, 0.34, 6).rotateZ(Math.PI / 2 + 0.6), '#ffd92e', at(-0.58, 0.46, 0)),
+    painted(new THREE.SphereGeometry(0.05, 5, 4), '#141414', at(0.54, 0.8, 0.15)),
+    painted(new THREE.SphereGeometry(0.05, 5, 4), '#141414', at(0.54, 0.8, -0.15)),
+  ];
+  return mergeGeometries(parts);
+}
 
 export function createRenderer(container) {
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  let pixelRatio = Math.min(devicePixelRatio, MAX_PIXEL_RATIO);
+  renderer.setPixelRatio(pixelRatio);
   renderer.setSize(innerWidth, innerHeight);
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   container.appendChild(renderer.domElement);
 
@@ -29,7 +152,7 @@ export function createRenderer(container) {
   scene.add(new THREE.HemisphereLight('#ffffff', '#3a6f8f', 1.6));
   const sun = new THREE.DirectionalLight('#fff4dd', 2.2);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.set(1536, 1536);
   Object.assign(sun.shadow.camera, { left: -22, right: 22, top: 22, bottom: -22, near: 1, far: 80 });
   sun.shadow.bias = -0.0005;
   scene.add(sun, sun.target);
@@ -84,7 +207,9 @@ export function createRenderer(container) {
   let flags = [];
   let currentTextures = [];
   let moverMeshes = [];
-  let wellGlows = [];
+  let holeMat = null;
+  let scenery = null; // clouds and balloons, drifting
+  let ducks = []; // what each rubber duck is doing on this level
 
   // A windmill: a tower with arms sweeping round, spikes hanging from them down to the water.
   function buildWindmill(g, m, metal) {
@@ -94,14 +219,14 @@ export function createRenderer(container) {
     cap.position.y = 4.7;
     g.add(tower, cap);
     const beamMat = mat('#4a3322', { roughness: 0.85 });
-    const sailMat = mat('#f1ead9', { roughness: 0.9, side: THREE.DoubleSide });
+    const sailMats = ['#ff5a5f', '#ffc93c', '#3fa7ff', '#5ad16a'].map((c) => mat(c, { roughness: 0.9, side: THREE.DoubleSide }));
     const spikeGeo = new THREE.ConeGeometry(0.16, 1.5, 6).rotateX(Math.PI); // points down
     for (let k = 0; k < m.blades; k++) {
       const arm = new THREE.Group();
       arm.rotation.y = (k * 2 * Math.PI) / m.blades;
       const beam = shadowed(new THREE.Mesh(new THREE.BoxGeometry(m.radius, 0.22, 0.22), beamMat));
       beam.position.set(m.radius / 2, 3.6, 0);
-      const sail = shadowed(new THREE.Mesh(new THREE.BoxGeometry(m.radius * 0.75, 0.05, WINDMILL_ARM + 0.15), sailMat));
+      const sail = shadowed(new THREE.Mesh(new THREE.BoxGeometry(m.radius * 0.75, 0.05, WINDMILL_ARM + 0.15), sailMats[k % sailMats.length]));
       sail.position.set(m.radius * 0.58, 3.78, 0);
       arm.add(beam, sail);
       const n = Math.max(3, Math.round(m.radius / 0.75));
@@ -118,33 +243,38 @@ export function createRenderer(container) {
     }
   }
 
-  // A spike circle: spikes all the way round, with bright posts marking the two openings.
+  // A spike circle: candy-striped, with spikes all the way round and bright posts with flags
+  // marking the openings, so you can see them coming round.
   function buildRing(g, m, metal) {
-    const baseMat = mat('#8f1d1d');
-    const spikeGeo = new THREE.ConeGeometry(0.17, 0.75, 6);
-    const segs = ringSegments(m);
-    for (const s of segs) {
-      const base = new THREE.Mesh(new THREE.BoxGeometry(s.len, 0.22, RING_THICK), baseMat);
-      base.position.set(Math.cos(s.a) * m.r, 0.1, -Math.sin(s.a) * m.r);
+    const stripes = [mat('#e8352e'), mat('#fff5e6')];
+    const spikeGeo = new THREE.ConeGeometry(0.2, 0.85, 6);
+    ringSegments(m).forEach((s, i) => {
+      const base = new THREE.Mesh(new THREE.BoxGeometry(s.len, 0.28, RING_THICK), stripes[(i >> 1) % 2]);
+      base.position.set(Math.cos(s.a) * m.r, 0.12, -Math.sin(s.a) * m.r);
       base.rotation.y = s.a + Math.PI / 2;
       const spike = shadowed(new THREE.Mesh(spikeGeo, metal));
-      spike.position.set(Math.cos(s.a) * m.r, 0.55, -Math.sin(s.a) * m.r);
+      spike.position.set(Math.cos(s.a) * m.r, 0.65, -Math.sin(s.a) * m.r);
       g.add(base, spike);
-    }
-    const postMat = mat('#ffb020', { emissive: '#ff8a00', emissiveIntensity: 0.4 });
+    });
+    const postMat = mat('#ffd21f', { emissive: '#ff9d00', emissiveIntensity: 0.45 });
+    const flagMat = mat('#39e07a', { emissive: '#17a34a', emissiveIntensity: 0.4, side: THREE.DoubleSide });
     const halfGap = (m.gapDeg * Math.PI) / 360;
     for (const d of m.gaps) {
       for (const side of [-1, 1]) {
         const a = (d * Math.PI) / 180 + side * halfGap;
-        const post = shadowed(new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, 1.5, 8), postMat));
-        post.position.set(Math.cos(a) * m.r, 0.75, -Math.sin(a) * m.r);
-        g.add(post);
+        const post = shadowed(new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.15, 2.4, 8), postMat));
+        post.position.set(Math.cos(a) * m.r, 1.2, -Math.sin(a) * m.r);
+        const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.6), flagMat);
+        flag.position.set(Math.cos(a) * m.r, 2.1, -Math.sin(a) * m.r);
+        flag.rotation.y = a;
+        g.add(post, flag);
       }
     }
   }
 
   function buildLevel(level) {
     const lg = new THREE.Group();
+    let scenery = null;
     // --- docks (walls) -------------------------------------------------------
     for (const w of level.walls) {
       const base = shadowed(new THREE.Mesh(new THREE.BoxGeometry(w.w, 0.7, w.h), woodDark));
@@ -187,7 +317,9 @@ export function createRenderer(container) {
     const poleMat = mat('#f4f4f4');
     const flags = [];
     const zoneEnds = (z) =>
-      z.w >= z.h
+      z.angle !== undefined
+        ? [-1, 1].map((k) => ({ x: z.x + (k * Math.cos(z.angle) * z.w) / 2, y: z.y + (k * Math.sin(z.angle) * z.w) / 2 }))
+        : z.w >= z.h
         ? [{ x: z.x - z.w / 2, y: z.y }, { x: z.x + z.w / 2, y: z.y }]
         : [{ x: z.x, y: z.y - z.h / 2 }, { x: z.x, y: z.y + z.h / 2 }];
     level.checkpoints.forEach((cp, i) => {
@@ -248,9 +380,7 @@ export function createRenderer(container) {
     ch.lineTo(50, 22);
     ch.stroke();
     const currentTextures = [];
-    // a level-wide river shows its arrows on all of the water
-    const flowing = level.flow ? level.water.map((r) => ({ ...r, ...level.flow })) : [];
-    for (const c of [...level.currents, ...flowing]) {
+    for (const c of level.currents) {
       const tex = new THREE.CanvasTexture(chevron);
       tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
       // the plane gets turned to point along the flow, so a sideways one swaps its width and height
@@ -322,43 +452,174 @@ export function createRenderer(container) {
         if (m.h > m.w) box.rotation.y = Math.PI / 2;
         g.add(box);
       }
+      g.userData.noBatch = true;
+      batch(g); // moves as one, so its parts can still be one mesh
       lg.add(g);
       return g;
     });
 
-    // --- wells: holes in the track, glowing from somewhere far below ---------------
-    const wellGlows = [];
-    for (const w of level.wells || []) {
-      const c = document.createElement('canvas');
-      c.width = c.height = 128;
-      const g = c.getContext('2d');
-      const grad = g.createRadialGradient(64, 64, 4, 64, 64, 64);
-      grad.addColorStop(0, '#000000');
-      grad.addColorStop(0.45, '#2a0500');
-      grad.addColorStop(0.8, '#a81e05');
-      grad.addColorStop(1, '#ff7a1a');
-      g.fillStyle = grad;
-      g.fillRect(0, 0, 128, 128);
-      const tex = new THREE.CanvasTexture(c);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      const hole = new THREE.Mesh(new THREE.CircleGeometry(w.r, 40).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: tex }));
-      hole.position.copy(toWorld(w.x, w.y, 0.04));
-      const rim = shadowed(new THREE.Mesh(new THREE.TorusGeometry(w.r, 0.16, 8, 40).rotateX(Math.PI / 2), mat('#3a3f47', { roughness: 0.95 })));
-      rim.position.copy(toWorld(w.x, w.y, 0.08));
-      const glow = new THREE.Mesh(
-        new THREE.RingGeometry(w.r, w.r + 0.55, 40).rotateX(-Math.PI / 2),
-        new THREE.MeshBasicMaterial({ color: '#ff5a1f', transparent: true, opacity: 0.35, depthWrite: false }),
-      );
-      glow.position.copy(toWorld(w.x, w.y, 0.05));
-      lg.add(hole, rim, glow);
-      wellGlows.push(glow.material);
+    // --- holes in the track: plain dark holes with a stone lip. Everything within reach of their
+    // pull is drawn on the water: it darkens as it slopes in, with ripples and streaks running
+    // towards the hole, so you can see how far the pull goes.
+    let holeMat = null;
+    if (level.wells?.length) {
+      const pos = [];
+      const local = [];
+      const lip = [];
+      const SEGS = 56;
+      for (const w of level.wells) {
+        const radii = [0, w.r * 0.6, w.r];
+        for (let k = 1; k <= 10; k++) radii.push(w.r + (WELL_PULL_RANGE * k) / 10);
+        for (let i = 1; i < radii.length; i++) {
+          for (let j = 0; j < SEGS; j++) {
+            const a0 = (j / SEGS) * 2 * Math.PI;
+            const a1 = ((j + 1) / SEGS) * 2 * Math.PI;
+            const q = (r, a) => [Math.cos(a) * r, Math.sin(a) * r];
+            const [p00, p01, p10, p11] = [q(radii[i - 1], a0), q(radii[i - 1], a1), q(radii[i], a0), q(radii[i], a1)];
+            // only where there's water to draw on, never out over the drop
+            const mx = w.x + (p00[0] + p11[0]) / 2;
+            const my = w.y + (p00[1] + p11[1]) / 2;
+            if (level.water && !onWater(level, mx, my)) continue;
+            for (const [lx, ly] of [p00, p10, p11, p00, p11, p01]) {
+              pos.push(w.x + lx, 0.04, -(w.y + ly));
+              local.push(lx, ly);
+              lip.push(w.r);
+            }
+          }
+        }
+        const rim = shadowed(new THREE.Mesh(new THREE.TorusGeometry(w.r, 0.2, 8, 44).rotateX(Math.PI / 2), mat('#6e6a63', { roughness: 0.95 })));
+        rim.position.copy(toWorld(w.x, w.y, 0.08));
+        lg.add(rim);
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute('aLocal', new THREE.Float32BufferAttribute(local, 2));
+      geo.setAttribute('aLip', new THREE.Float32BufferAttribute(lip, 1));
+      holeMat = new THREE.ShaderMaterial({
+        transparent: true,
+        depthWrite: false,
+        uniforms: {
+          uTime: { value: 0 },
+          uRange: { value: WELL_PULL_RANGE },
+          uSpeed: { value: 0.35 + 0.35 * Math.min(1, (level.wellPull ?? WELL_PULL) / WELL_PULL) },
+        },
+        vertexShader: /* glsl */ `
+          attribute vec2 aLocal; attribute float aLip;
+          varying vec2 vL; varying float vLip;
+          void main() {
+            vL = aLocal; vLip = aLip;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }`,
+        fragmentShader: /* glsl */ `
+          uniform float uTime; uniform float uRange; uniform float uSpeed;
+          varying vec2 vL; varying float vLip;
+          void main() {
+            float d = length(vL);
+            if (d < vLip) {
+              // the hole: black at the bottom, the far wall catching a little light
+              float wall = smoothstep(0.45, 1.05, length(vL / vLip + vec2(0.0, 0.42)));
+              gl_FragColor = vec4(mix(vec3(0.015, 0.02, 0.03), vec3(0.2, 0.2, 0.21), wall), 1.0);
+            } else {
+              float e = clamp((d - vLip) / uRange, 0.0, 1.0); // 0 at the lip, 1 where the pull ends
+              float near = 1.0 - e;
+              float t = uTime * uSpeed;
+              float a = atan(vL.y, vL.x);
+              // rings closing in on the hole, and curved streaks being dragged round into it
+              float rf = fract(e * 3.0 + t);
+              float ring = smoothstep(0.0, 0.1, rf) * smoothstep(0.34, 0.1, rf);
+              float sf = fract(a / 6.2832 * 5.0 + e * 1.6 + t * 1.5);
+              float streak = smoothstep(0.0, 0.05, sf) * smoothstep(0.22, 0.05, sf);
+              float white = max(ring * 0.75, streak * 0.55) * smoothstep(0.0, 0.25, near);
+              float dark = near * near * 0.75;
+              vec3 c = mix(vec3(0.02, 0.1, 0.2), vec3(0.92, 0.98, 1.0), white / max(white + dark, 0.001));
+              gl_FragColor = vec4(c, clamp(max(dark, white * (0.25 + near * 0.6)), 0.0, 1.0));
+            }
+            #include <colorspace_fragment>
+          }`,
+      });
+      const holes = new THREE.Mesh(geo, holeMat);
+      holes.userData.noBatch = true;
+      holes.renderOrder = 1;
+      lg.add(holes);
+    }
+
+    // rubber ducks: some bobbing along the river, some going round and round into each hole
+    const ducks = [];
+    {
+      let seed = 23;
+      const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+      const channel = level.river && level.water.find((r) => r.type === 'ribbon');
+      if (channel) {
+        for (let i = 0; i < 16; i++) ducks.push({ channel, s: rand() * channel.length, lat: (rand() - 0.5) * channel.hw * 1.5, tilt: rand() * 6 });
+      }
+      for (const w of (level.wells || []).slice(0, 12)) {
+        for (let i = 0; i < 2; i++) ducks.push({ hole: w, phase: rand() });
+      }
     }
 
     // --- a drop: water channels on stone towers over a misty chasm ---------------
     if (level.water) {
       const stone = mat('#8d939e', { roughness: 0.95 });
       const lip = mat('#b9bec7', { roughness: 0.9 });
+      const kerbCanvas = document.createElement('canvas');
+      kerbCanvas.width = 4;
+      kerbCanvas.height = 32;
+      {
+        const g = kerbCanvas.getContext('2d');
+        g.fillStyle = '#ffffff';
+        g.fillRect(0, 0, 4, 32);
+        g.fillStyle = '#e8352e';
+        g.fillRect(0, 0, 4, 16);
+      }
+      const kerbTex = new THREE.CanvasTexture(kerbCanvas);
+      kerbTex.colorSpace = THREE.SRGBColorSpace;
+      kerbTex.wrapT = THREE.RepeatWrapping;
+      kerbTex.magFilter = THREE.NearestFilter;
+      const kerb = new THREE.MeshLambertMaterial({ map: kerbTex });
+      const side = new THREE.MeshLambertMaterial({ color: '#8d939e', side: THREE.DoubleSide });
+      const pillar = new THREE.CylinderGeometry(0.4, 0.6, -FLOOR, 6);
+      const addPillar = (x, y) => {
+        const m = new THREE.Mesh(pillar.clone(), stone);
+        m.position.copy(toWorld(x, y, FLOOR / 2 - 1));
+        lg.add(m);
+      };
       for (const r of level.water) {
+        if (r.type) {
+          // a curving channel or a round pool: red and white kerbs mark where the water ends
+          const notOther = (x, y) => !level.water.some((o) => o !== r && inWater(o, x, y));
+          const path = r.type === 'circle' ? circlePath(r) : r.path;
+          const edges = r.type === 'circle' ? [0] : [r.hw, -r.hw];
+          const surfaceGeo = r.type === 'circle' ? new THREE.CircleGeometry(r.r, 64).rotateX(-Math.PI / 2).translate(r.x, 0, -r.y) : band(path, -r.hw, r.hw, 0);
+          const shadowGeo = surfaceGeo.clone();
+          shadowGeo.translate(0, 0.01, 0);
+          const catcher = new THREE.Mesh(shadowGeo, new THREE.ShadowMaterial({ opacity: 0.22 }));
+          catcher.receiveShadow = true;
+          lg.add(new THREE.Mesh(surfaceGeo, water.material), catcher);
+          for (const e of edges) {
+            const out = r.type === 'circle' ? -0.6 : Math.sign(e) * 0.6; // a circle runs anticlockwise, so left is inwards
+            lg.add(new THREE.Mesh(band(path, Math.min(e, e + out), Math.max(e, e + out), 0.015, { keep: notOther, tile: 2.4 }), kerb));
+            lg.add(new THREE.Mesh(wall(path, e + out, 0.015, -1.5, notOther), side));
+          }
+          if (r.type === 'circle') {
+            for (let a = 0; a < 5; a++) addPillar(r.x + Math.cos(a * 1.257) * r.r * 0.7, r.y + Math.sin(a * 1.257) * r.r * 0.7);
+          } else {
+            r.path.forEach(([x, y], i) => {
+              if (i % 14 !== 3) return;
+              for (const lat of [r.hw - 0.5, 0.5 - r.hw]) {
+                const p = along(r, i * r.step, lat);
+                addPillar(p.x, p.y);
+              }
+            });
+            // the river's arrows, running downstream
+            const tex = new THREE.CanvasTexture(chevron);
+            tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+            tex.repeat.set((2 * r.hw) / 2.8, 1);
+            const arrows = new THREE.Mesh(band(path, -r.hw, r.hw, 0.02, { tile: 2.8 }), new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.32, depthWrite: false }));
+            lg.add(arrows);
+            currentTextures.push({ tex, speed: (level.river?.along ?? 0) * 0.42 });
+          }
+          continue;
+        }
         const surface = new THREE.Mesh(new THREE.PlaneGeometry(r.w, r.h).rotateX(-Math.PI / 2), water.material);
         surface.position.copy(toWorld(r.x, r.y, 0));
         const catcher = new THREE.Mesh(new THREE.PlaneGeometry(r.w, r.h).rotateX(-Math.PI / 2), new THREE.ShadowMaterial({ opacity: 0.22 }));
@@ -370,7 +631,8 @@ export function createRenderer(container) {
         edge.position.copy(toWorld(r.x, r.y, -0.2));
         lg.add(surface, catcher, tower, edge);
       }
-      buildValley(lg, level);
+      pillar.dispose();
+      scenery = buildValley(lg, level);
     }
 
     // --- scenery: little islands outside the canal --------------------------------
@@ -403,7 +665,8 @@ export function createRenderer(container) {
         }
       }
     }
-    return { lg, flags, currentTextures, moverMeshes, wellGlows };
+    batch(lg);
+    return { lg, flags, currentTextures, moverMeshes, holeMat, scenery, ducks };
   }
 
   // Far below the water channels of levels with a drop: a hazy valley with a winding river,
@@ -418,14 +681,16 @@ export function createRenderer(container) {
     const cy = (b.minY + b.maxY) / 2;
     const span = Math.max(b.maxX - b.minX, b.maxY - b.minY) + 160;
     // keep spires out from under the channels so nothing pokes through
-    const nearWater = (x, y, pad) => level.water.some((r) => Math.abs(x - r.x) < r.w / 2 + pad && Math.abs(y - r.y) < r.h / 2 + pad);
+    const nearWater = (x, y, pad) => onWater(level, x, y, pad);
+    const theme = level.theme || {};
+    const lambert = (color) => new THREE.MeshLambertMaterial({ color, flatShading: true });
 
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(span, span).rotateX(-Math.PI / 2), mat('#4d6a44', { roughness: 1 }));
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(span, span).rotateX(-Math.PI / 2), new THREE.MeshLambertMaterial({ color: theme.ground || '#55803f' }));
     ground.position.copy(toWorld(cx, cy, FLOOR));
     lg.add(ground);
 
     // a river winding along the valley floor
-    const riverMat = mat('#3c8fc4', { roughness: 0.4, metalness: 0.1 });
+    const riverMat = new THREE.MeshLambertMaterial({ color: theme.valleyRiver || '#3c8fc4' });
     let px = cx - span / 2;
     let py = cy + Math.sin(0) * 18;
     for (let k = 1; k <= 60; k++) {
@@ -440,7 +705,7 @@ export function createRenderer(container) {
     }
 
     // rock spires, some tall enough to loom just below the channels
-    const rockMats = ['#7b7266', '#8a8277', '#6b645b'].map((c) => mat(c, { roughness: 1, flatShading: true }));
+    const rockMats = (theme.rocks || ['#7b7266', '#8a8277', '#6b645b']).map(lambert);
     for (let i = 0; i < 70; i++) {
       const x = cx + (rand() - 0.5) * span * 0.8;
       const y = cy + (rand() - 0.5) * span * 0.8;
@@ -454,32 +719,72 @@ export function createRenderer(container) {
     }
 
     // pine trees on the valley floor
-    const pine = mat('#2f5a34', { roughness: 1, flatShading: true });
-    const trunkMat = mat('#5a3d24');
+    const pines = (theme.pines || ['#2f7a3c', '#3d9148', '#256b35']).map(lambert);
+    const trunkMat = lambert('#5a3d24');
     const pineGeo = new THREE.ConeGeometry(1.4, 4.5, 6);
     const trunkGeo = new THREE.CylinderGeometry(0.25, 0.3, 1.2);
     for (let i = 0; i < 220; i++) {
       const x = cx + (rand() - 0.5) * span * 0.85;
       const y = cy + (rand() - 0.5) * span * 0.85;
       const s = 0.7 + rand() * 0.9;
-      const top = new THREE.Mesh(pineGeo, pine);
+      const top = new THREE.Mesh(pineGeo.clone(), pines[i % pines.length]);
       top.scale.setScalar(s);
       top.position.copy(toWorld(x, y, FLOOR + 1.2 * s + 2.25 * s));
-      const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+      const trunk = new THREE.Mesh(trunkGeo.clone(), trunkMat);
       trunk.scale.setScalar(s);
       trunk.position.copy(toWorld(x, y, FLOOR + 0.6 * s));
       lg.add(top, trunk);
     }
 
-    // drifting mist layers between you and the bottom
-    for (const [h, o] of [[-12, 0.1], [-24, 0.14], [-36, 0.18]]) {
-      const mist = new THREE.Mesh(
-        new THREE.PlaneGeometry(span, span).rotateX(-Math.PI / 2),
-        new THREE.MeshBasicMaterial({ color: '#e8f0f7', transparent: true, opacity: o, depthWrite: false }),
-      );
-      mist.position.copy(toWorld(cx, cy, h));
-      lg.add(mist);
+    // one layer of mist between you and the bottom
+    const mist = new THREE.Mesh(
+      new THREE.PlaneGeometry(span, span).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: '#f4f7fa', transparent: true, opacity: 0.22, depthWrite: false }),
+    );
+    mist.position.copy(toWorld(cx, cy, -30));
+    lg.add(mist);
+
+    // puffy clouds floating below the track, and hot air balloons rising through them
+    const flat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+    const cloudParts = [];
+    for (let i = 0; i < 34; i++) {
+      const x = cx + (rand() - 0.5) * span * 0.75;
+      const y = cy + (rand() - 0.5) * span * 0.75;
+      const h = -9 - rand() * 18;
+      for (let k = 0; k < 4; k++) {
+        const r = 2 + rand() * 2.4;
+        cloudParts.push(painted(new THREE.IcosahedronGeometry(1, 1), '#ffffff', at(x + (k - 1.5) * 2.6, h + rand(), -y + (rand() - 0.5) * 3, r, r * 0.65, r)));
+      }
     }
+    const balloonColors = [['#ff5a5f', '#fff5e6'], ['#3fa7ff', '#ffc93c'], ['#5ad16a', '#fff5e6'], ['#b76bff', '#ffc93c'], ['#ff8a1f', '#3fa7ff']];
+    const balloonParts = [];
+    for (let i = 0; i < 12; i++) {
+      const x = cx + (rand() - 0.5) * span * 0.6;
+      const y = cy + (rand() - 0.5) * span * 0.6;
+      const h = -7 - rand() * 10;
+      const [c0, c1] = balloonColors[i % balloonColors.length];
+      const R = 2.6 + rand() * 1;
+      // a striped envelope: every other wedge of the sphere in the second colour
+      const sphere = new THREE.SphereGeometry(R, 12, 9).toNonIndexed();
+      sphere.scale(1, 1.15, 1);
+      const p = sphere.attributes.position;
+      const colors = [];
+      const [a, b] = [new THREE.Color(c0), new THREE.Color(c1)];
+      for (let v = 0; v < p.count; v += 3) {
+        const mx = (p.getX(v) + p.getX(v + 1) + p.getX(v + 2)) / 3;
+        const mz = (p.getZ(v) + p.getZ(v + 1) + p.getZ(v + 2)) / 3;
+        const c = Math.floor(((Math.atan2(mz, mx) + Math.PI) / (2 * Math.PI)) * 12) % 2 ? a : b;
+        for (let n = 0; n < 3; n++) colors.push(c.r, c.g, c.b);
+      }
+      sphere.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+      sphere.translate(x, h, -y);
+      balloonParts.push(sphere, painted(new THREE.BoxGeometry(0.9, 0.7, 0.9), '#8a5a33', at(x, h - R * 1.15 - 1.1, -y)));
+    }
+    const clouds = new THREE.Mesh(mergeGeometries(cloudParts), flat);
+    const balloons = new THREE.Mesh(mergeGeometries(balloonParts), flat);
+    clouds.userData.noBatch = balloons.userData.noBatch = true;
+    lg.add(clouds, balloons);
+    return { clouds, balloons };
   }
 
   function setLevel(level) {
@@ -498,16 +803,23 @@ export function createRenderer(container) {
     flags = built.flags;
     currentTextures = built.currentTextures;
     moverMeshes = built.moverMeshes;
-    wellGlows = built.wellGlows;
+    holeMat = built.holeMat;
+    scenery = built.scenery;
+    ducks = built.ducks;
+    ducks.holes = level.wells || [];
+    duckMesh.count = Math.min(ducks.length, MAX_DUCKS);
+    duckMesh.visible = ducks.length > 0;
     scene.add(levelGroup);
     // levels with a drop swap the open sea for a misty chasm (and back again for the others)
     const chasm = !!level.water;
     water.visible = !chasm;
     shadowCatcher.visible = !chasm;
-    scene.background.set(chasm ? '#7d9bb6' : '#9fdcf5');
-    scene.fog.color.set(chasm ? '#7d9bb6' : '#9fdcf5');
+    const sky = level.theme?.sky || (chasm ? '#a9d8f2' : '#9fdcf5');
+    scene.background.set(sky);
+    scene.fog.color.set(sky);
     scene.fog.near = chasm ? 40 : 45;
     scene.fog.far = chasm ? 150 : 110; // far enough to see the valley floor, hazy
+    if (new URLSearchParams(location.search).get('cam') === 'far') scene.fog.far = 900;
     firstFrame = true;
   }
 
@@ -610,10 +922,11 @@ export function createRenderer(container) {
   const rope = new THREE.Mesh(new THREE.TorusGeometry(R - 0.02, 0.025, 6, 72).rotateX(Math.PI / 2), mat('#1f2329', { roughness: 0.9 }));
   rope.position.y = 0.36;
   deck.add(rope);
+  const loopMat = mat('#2b2f36');
   for (let k = 0; k < 8; k++) {
     // little rope loops (the handles) around the outside of the tube
     const a = (k / 8) * Math.PI * 2 + Math.PI / 8;
-    const loop = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.03, 6, 12), mat('#2b2f36'));
+    const loop = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.03, 6, 12), loopMat);
     loop.position.set(Math.cos(a) * (R + 0.02), 0.28, -Math.sin(a) * (R + 0.02));
     loop.rotation.y = a + Math.PI / 2;
     deck.add(loop);
@@ -662,6 +975,7 @@ export function createRenderer(container) {
     }
   }
   buildZones(ALL_SEATS);
+  zones.userData.noBatch = true;
   const flash = new THREE.Mesh(
     new THREE.CylinderGeometry(R + 0.15, R + 0.15, 0.05, 48),
     new THREE.MeshBasicMaterial({ color: '#ff2a2a', transparent: true, opacity: 0 }),
@@ -719,6 +1033,8 @@ export function createRenderer(container) {
     );
     marker.position.y = 1.9;
     g.add(marker);
+    batch(body);
+    g.userData.noBatch = true;
 
     // name tag: a small HTML pill in the player's colour that follows their head on screen
     // (HTML so it stays crisp and readable at any camera distance)
@@ -731,6 +1047,8 @@ export function createRenderer(container) {
 
     return { g, ring, arrow, body, marker, tag, tagName, hex, squash: 0, occupied: true, drop: 1, tagKey: '', label: `P${i + 1}` };
   });
+
+  batch(deck);
 
   // mine = this is you (online) or the player you're steering (solo): a thin white outline
   function drawTag(c, text, mine, online) {
@@ -760,25 +1078,93 @@ export function createRenderer(container) {
     });
   }
 
-  // --- fart puffs -----------------------------------------------------------------
-  const puffGeo = new THREE.SphereGeometry(1, 10, 8);
+  // --- fart puffs and confetti ------------------------------------------------------
+  // One instanced mesh, so a whole crew farting at once is a single thing to draw.
+  const MAX_PUFFS = 320;
+  const puffGeo = new THREE.IcosahedronGeometry(1, 1);
+  const puffAlpha = new THREE.InstancedBufferAttribute(new Float32Array(MAX_PUFFS), 1);
+  puffAlpha.setUsage(THREE.DynamicDrawUsage);
+  puffGeo.setAttribute('aAlpha', puffAlpha);
+  const puffMat = new THREE.MeshLambertMaterial({ transparent: true, depthWrite: false });
+  puffMat.onBeforeCompile = (shader) => {
+    shader.vertexShader = 'attribute float aAlpha; varying float vAlpha;\n' + shader.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nvAlpha = aAlpha;');
+    shader.fragmentShader = 'varying float vAlpha;\n' + shader.fragmentShader.replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.a *= vAlpha;');
+  };
+  const puffMesh = new THREE.InstancedMesh(puffGeo, puffMat, MAX_PUFFS);
+  puffMesh.frustumCulled = false;
+  puffMesh.visible = false;
+  scene.add(puffMesh);
   const puffColors = ['#b9d86a', '#d7e38c', '#a6c25a', '#e2d6a0'].map((c) => new THREE.Color(c));
-  const puffs = Array.from({ length: 260 }, () => {
-    const m = new THREE.Mesh(puffGeo, new THREE.MeshLambertMaterial({ transparent: true, opacity: 0, depthWrite: false }));
-    m.visible = false;
-    scene.add(m);
-    return { m, life: 0, max: 1, vel: new THREE.Vector3(), size: 0.3 };
+  const confettiColors = ['#ff5a5f', '#ffc93c', '#3fa7ff', '#5ad16a', '#ff8ad8', '#ffffff'].map((c) => new THREE.Color(c));
+  const puffs = Array.from({ length: MAX_PUFFS }, (_, i) => {
+    puffMesh.setColorAt(i, puffColors[0]);
+    return { pos: new THREE.Vector3(), vel: new THREE.Vector3(), life: 0, max: 1, size: 0.3, confetti: false };
   });
   let puffCursor = 0;
-  function spawnPuff(pos, vel, size, life) {
-    const p = puffs[puffCursor];
-    puffCursor = (puffCursor + 1) % puffs.length;
-    p.m.position.copy(pos);
+  let puffsLive = 0;
+  function spawnPuff(pos, vel, size, life, color, confetti = false) {
+    const i = puffCursor;
+    const p = puffs[i];
+    puffCursor = (puffCursor + 1) % MAX_PUFFS;
+    if (p.life <= 0) puffsLive++;
+    p.pos.copy(pos);
     p.vel.copy(vel);
     p.size = size;
     p.life = p.max = life;
-    p.m.material.color.copy(puffColors[(Math.random() * puffColors.length) | 0]);
-    p.m.visible = true;
+    p.confetti = confetti;
+    puffMesh.setColorAt(i, color || puffColors[(Math.random() * puffColors.length) | 0]);
+    puffMesh.instanceColor.needsUpdate = true;
+  }
+  const raftNow = new THREE.Vector3();
+  function confetti(n = 70) {
+    for (let k = 0; k < n; k++) {
+      const a = Math.random() * 2 * Math.PI;
+      const v = 2 + Math.random() * 5;
+      tmp.set(Math.cos(a) * v, 6 + Math.random() * 7, Math.sin(a) * v);
+      spawnPuff(raftNow, tmp, 0.1 + Math.random() * 0.1, 1.2 + Math.random() * 0.8, confettiColors[k % confettiColors.length], true);
+    }
+  }
+
+  const MAX_DUCKS = 48;
+  const duckMesh = new THREE.InstancedMesh(duckGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true }), MAX_DUCKS);
+  duckMesh.frustumCulled = false;
+  duckMesh.visible = false;
+  scene.add(duckMesh);
+  const duckPos = new THREE.Vector3();
+  const duckScale = new THREE.Vector3();
+  const duckTurn = new THREE.Quaternion();
+  const UP = new THREE.Vector3(0, 1, 0);
+  const duckMatrix = new THREE.Matrix4();
+  function updateDucks() {
+    for (let i = 0; i < duckMesh.count; i++) {
+      const d = ducks[i];
+      let x, y, angle, h, size;
+      if (d.hole) {
+        // round and round, faster and closer, then down the hole and back to the start
+        const f = (time / 7 + d.phase) % 1;
+        const r = d.hole.r + WELL_PULL_RANGE * (1 - f) ** 1.4;
+        const a = d.phase * 6.28 + 9 * f * f + 2 * f;
+        x = d.hole.x + Math.cos(a) * r;
+        y = d.hole.y + Math.sin(a) * r;
+        angle = a + Math.PI / 2 + 0.4;
+        size = Math.min(1, f * 8) * (f > 0.92 ? (1 - f) / 0.08 : 1);
+        h = f > 0.92 ? -0.5 * ((f - 0.92) / 0.08) : Math.sin(time * 3 + d.phase * 9) * 0.04;
+      } else {
+        const s = (d.s + time * 1.4) % d.channel.length;
+        const p = along(d.channel, s, d.lat);
+        ({ x, y, angle } = p);
+        h = Math.sin(time * 2.4 + d.tilt) * 0.06;
+        // fade in and out at the ends of the river, and duck out of the way of any hole
+        size = Math.min(1, s / 4, (d.channel.length - s) / 4);
+        for (const w of ducks.holes) size = Math.min(size, Math.max(0, (Math.hypot(x - w.x, y - w.y) - w.r - 0.4) / 0.6));
+      }
+      duckPos.set(x, h, -y);
+      duckScale.setScalar(0.95 * Math.max(0.001, size));
+      duckTurn.setFromAxisAngle(UP, angle);
+      duckMatrix.compose(duckPos, duckTurn, duckScale);
+      duckMesh.setMatrixAt(i, duckMatrix);
+    }
+    duckMesh.instanceMatrix.needsUpdate = true;
   }
 
   // --- per-frame ------------------------------------------------------------------
@@ -788,12 +1174,37 @@ export function createRenderer(container) {
   let firstFrame = true;
   let focusShift = 0; // metres ahead of the raft to centre the view on (phones: room for the lobby card)
   const tmp = new THREE.Vector3();
+  const puffMatrix = new THREE.Matrix4();
+
+  // If this machine can't keep up, quietly draw fewer pixels (and in the end drop the shadows).
+  let frameClock = 0;
+  let slowTotal = 0;
+  let slowFrames = 0;
+  function watchFrameRate() {
+    const now = performance.now();
+    const gap = now - frameClock;
+    frameClock = now;
+    if (gap > 250) return; // a hidden tab or a level loading, not slowness
+    slowTotal += gap;
+    if (++slowFrames < 90) return;
+    if (slowTotal / slowFrames > SLOW_FRAME_MS) {
+      if (pixelRatio > 1) renderer.setPixelRatio((pixelRatio = Math.max(1, pixelRatio - 0.25)));
+      else sun.castShadow = false;
+    }
+    slowTotal = slowFrames = 0;
+  }
 
   function render(prev, curr, alpha, frameDt, input) {
     time += frameDt;
     water.material.uniforms.uTime.value = time;
     for (const c of currentTextures) c.tex.offset.y += c.speed * frameDt;
-    for (const w of wellGlows) w.opacity = 0.3 + 0.18 * Math.sin(time * 3.1);
+    if (holeMat) holeMat.uniforms.uTime.value = time;
+    if (scenery) {
+      scenery.clouds.position.x = Math.sin(time * 0.025) * 14;
+      scenery.balloons.position.y = Math.sin(time * 0.35) * 1.2;
+    }
+    if (duckMesh.visible) updateDucks();
+    watchFrameRate();
 
     const rx = lerp(prev.raft.x, curr.raft.x, alpha);
     const ry = lerp(prev.raft.y, curr.raft.y, alpha);
@@ -802,6 +1213,7 @@ export function createRenderer(container) {
     const drop = curr.cause === 'fell' ? -16 * (1 - curr.respawn) ** 2 : 0;
     raft.position.copy(toWorld(rx, ry, Math.sin(time * 2.2) * 0.04 + drop));
     raft.rotation.y = ra;
+    raftNow.copy(raft.position).setY(1);
     deck.rotation.x = Math.sin(time * 1.7) * 0.025;
     deck.rotation.z = Math.cos(time * 1.3) * 0.025;
 
@@ -879,19 +1291,30 @@ export function createRenderer(container) {
       }
     });
 
-    for (const p of puffs) {
-      if (p.life <= 0) continue;
-      p.life -= frameDt;
-      if (p.life <= 0) {
-        p.m.visible = false;
-        continue;
-      }
-      const k = 1 - p.life / p.max;
-      p.vel.multiplyScalar(Math.exp(-frameDt * 2.5));
-      p.m.position.addScaledVector(p.vel, frameDt);
-      p.m.scale.setScalar(p.size * (1 + k * 2));
-      p.m.material.opacity = 0.55 * (1 - k);
-    }
+    if (puffsLive > 0) {
+      puffMesh.visible = true;
+      puffs.forEach((p, i) => {
+        if (p.life <= 0) return;
+        p.life -= frameDt;
+        if (p.life <= 0) {
+          puffsLive--;
+          puffAlpha.setX(i, 0);
+          puffMatrix.makeScale(0, 0, 0);
+          puffMesh.setMatrixAt(i, puffMatrix);
+          return;
+        }
+        const k = 1 - p.life / p.max;
+        if (p.confetti) p.vel.y -= 16 * frameDt;
+        p.vel.multiplyScalar(Math.exp(-frameDt * (p.confetti ? 0.8 : 2.5)));
+        p.pos.addScaledVector(p.vel, frameDt);
+        const size = p.confetti ? p.size : p.size * (1 + k * 2);
+        puffMatrix.makeScale(size, size, size).setPosition(p.pos);
+        puffMesh.setMatrixAt(i, puffMatrix);
+        puffAlpha.setX(i, p.confetti ? 1 - k * k : 0.55 * (1 - k));
+      });
+      puffAlpha.needsUpdate = true;
+      puffMesh.instanceMatrix.needsUpdate = true;
+    } else puffMesh.visible = false;
 
     flash.material.opacity = curr.phase === 'respawning' ? 0.35 + 0.3 * Math.sin(time * 30) : 0;
 
@@ -956,18 +1379,22 @@ export function createRenderer(container) {
     renderer.setSize(innerWidth, innerHeight);
     // keep the course readable on tall phone screens (?cam=close: a close-up, for screenshots)
     camOffset.set(0, camera.aspect < 1 ? 32 : 24, camera.aspect < 1 ? 18 : 15);
-    if (new URLSearchParams(location.search).get('cam') === 'close') camOffset.multiplyScalar(0.35);
+    const cam = new URLSearchParams(location.search).get('cam');
+    if (cam === 'close') camOffset.multiplyScalar(0.35);
+    if (cam === 'far') camOffset.multiplyScalar(5.5); // the whole level at once, for checking its shape
   });
   dispatchEvent(new Event('resize'));
 
   return {
     render,
+    info: () => ({ ...renderer.info.render, geometries: renderer.info.memory.geometries, pixelRatio: renderer.getPixelRatio() }),
     screenToWorld,
     setLevel,
     setSeats,
     setFocusShift: (m) => (focusShift = m),
     snapCamera: () => (firstFrame = true),
     shake: (amount = 0.6) => (shake = amount),
+    confetti,
   };
 }
 

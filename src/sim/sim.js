@@ -11,6 +11,7 @@
 // step() returns the events that happened this tick (for sound / HUD).
 
 import { LEVELS } from './levels.js';
+import { inWater, nearestOnRibbon, onWater } from './track.js';
 
 export const TICK_RATE = 60;
 export const DT = 1 / TICK_RATE;
@@ -113,6 +114,7 @@ export const GAS = {
 };
 
 export const RESPAWN_TICKS = 50;
+const RIVER_CALM_TICKS = 90;
 
 export function createSim(RAPIER, level = LEVELS.canal, { crew = ALL_SEATS } = {}) {
   const world = new RAPIER.World({ x: 0, y: 0 });
@@ -129,7 +131,7 @@ export function createSim(RAPIER, level = LEVELS.canal, { crew = ALL_SEATS } = {
   }
   const addSensor = (r, kind, index) => {
     const c = world.createCollider(
-      RAPIER.ColliderDesc.cuboid(r.w / 2, r.h / 2).setTranslation(r.x, r.y).setSensor(true),
+      RAPIER.ColliderDesc.cuboid(r.w / 2, r.h / 2).setTranslation(r.x, r.y).setRotation(r.angle || 0).setSensor(true),
       fixed,
     );
     kinds.set(c.handle, { kind, index });
@@ -196,7 +198,9 @@ export function createSim(RAPIER, level = LEVELS.canal, { crew = ALL_SEATS } = {
     deaths: 0,
     crew: cleanCrew(crew),
     players: [],
+    calm: 0,               // ticks the river leaves you alone after a respawn, to get your bearings
   };
+  const riverWater = level.river && level.water.find((r) => r.type === 'ribbon');
   state.players = Array.from({ length: NUM_PLAYERS }, (_, i) => newPlayer(i));
 
   function newPlayer(i) {
@@ -222,6 +226,7 @@ export function createSim(RAPIER, level = LEVELS.canal, { crew = ALL_SEATS } = {
     raft.setLinvel({ x: 0, y: 0 }, true);
     raft.setAngvel(0, true);
     for (const p of state.players) Object.assign(p, { farting: false, gas: 1, burst: 0, idleTicks: 0, empty: false });
+    state.calm = RIVER_CALM_TICKS;
   }
 
   function step(cmds) {
@@ -313,8 +318,18 @@ export function createSim(RAPIER, level = LEVELS.canal, { crew = ALL_SEATS } = {
         raft.applyImpulse({ x: dx * a, y: dy * a }, true);
       }
     }
-    // a river: the whole level flows, all the time
-    if (level.flow) raft.applyImpulse({ x: level.flow.ax * mass * DT, y: level.flow.ay * mass * DT }, true);
+    // a river: carries you along the channel and slings you at the outside of every bend (the
+    // pools at each end are still, and so is the moment before you've set off or just respawned)
+    if (state.calm > 0) state.calm--;
+    if (riverWater && state.phase === 'playing' && !state.calm) {
+      const n = nearestOnRibbon(riverWater, pos.x, pos.y);
+      const inPool = level.water.some((r) => r.type === 'circle' && inWater(r, pos.x, pos.y));
+      if (n.d <= riverWater.hw && !inPool) {
+        const ax = n.tx * level.river.along + n.ty * n.bend * level.river.out;
+        const ay = n.ty * level.river.along - n.tx * n.bend * level.river.out;
+        raft.applyImpulse({ x: ax * mass * DT, y: ay * mass * DT }, true);
+      }
+    }
 
     const t = state.tick * DT;
     for (const m of movers) {
@@ -330,7 +345,7 @@ export function createSim(RAPIER, level = LEVELS.canal, { crew = ALL_SEATS } = {
     // Levels with a drop list their safe water; if the raft's centre leaves all of it, it falls.
     if (level.water && (state.phase === 'playing' || state.phase === 'ready')) {
       const at = raft.translation();
-      if (!level.water.some((r) => inRect(at, r))) startRespawn('fell', events);
+      if (!onWater(level, at.x, at.y)) startRespawn('fell', events);
     }
     // wells: holes in the track. Let the raft's centre over one and it's gone
     if (level.wells && (state.phase === 'playing' || state.phase === 'ready')) {

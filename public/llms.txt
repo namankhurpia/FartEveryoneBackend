@@ -14,7 +14,7 @@
 - Price: free
 - Modes: single player, or multiplayer for 2 to 4 friends in a room joined with a 4-digit code
 - Platforms: any modern web browser on desktop or phone; keyboard, mouse, touch and gamepad
-- Levels: 6 so far (The Bendy Canal, The Plank Road, Rapids Run, Windmill Ridge, Hell's Wells, The Inferno), all open from the start
+- Levels: 6 so far (The Bendy Canal, The Plank Road, Rapids Run, Windmill Ridge, The Holey Road, The Inferno), all open from the start
 - Scoring: only time counts. Points = 1000 x par time / your time. One leaderboard per crew size
 - Built with: three.js, Rapier 2D physics, Node.js, WebSockets, SQLite
 - Made by: Naman Khurpia, who builds AI by day, with Claude

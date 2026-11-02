@@ -1,0 +1,24 @@
+# Bottoms Up!
+
+> Bottoms Up! is a free, silly, co-op physics racing game that runs in the web browser. One to four friends share one round inflatable raft and steer it with nothing but farts. No download or account: type a name, share a 4-digit room code, and play. Created by Naman Khurpia.
+
+- Play: __SITE_URL__/
+- About the game, how to play, levels and FAQ: __SITE_URL__/about.html
+- Source code: https://github.com/namankhurpia/Bottomsup
+- Creator: Naman Khurpia, https://github.com/namankhurpia
+
+## Facts
+
+- Name: Bottoms Up!
+- Genre: co-op party game, physics racer
+- Price: free
+- Players: 1 to 4, online together, in rooms joined with a 4-digit code; solo practice too
+- Platforms: any modern web browser on desktop or phone; keyboard, mouse, touch and gamepad
+- Levels: 3 so far (The Bendy Canal, The Plank Road, Rapids Run), each unlocked by finishing the one before
+- Scoring: only time counts. Points = 1000 x par time / your time. One leaderboard per crew size
+- Built with: three.js, Rapier 2D physics, Node.js, WebSockets, SQLite
+- Made by: Naman Khurpia, who builds AI by day, with Claude
+
+## How it plays
+
+Everyone sits on the rim of the raft facing the centre, so a fart pushes the raft from where you sit straight through its middle. To go forward, the people at the back fart. To steer, walk around the rim or turn away from the centre to spin the raft. Push against each other and nothing happens: the skill is farting together at the right moment. Gas runs out if you hold too long.

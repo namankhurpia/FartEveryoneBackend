@@ -3,10 +3,56 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Bottoms Up!</title>
+    <title>Bottoms Up! Free Online Co-op Fart Raft Game (1–4 Players)</title>
+    <meta name="description" content="Up to four friends, one round raft, only farts for power. A free co-op physics racing game in your browser. No download, no account: type a name, share a room code, play." />
+    <meta name="author" content="Naman Khurpia" />
+    <meta name="theme-color" content="#47c2e8" />
+    <link rel="canonical" href="__SITE_URL__/" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💨</text></svg>" />
+
+    <!-- how the link looks when shared -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Bottoms Up!" />
+    <meta property="og:title" content="Bottoms Up! Free Online Co-op Fart Raft Game" />
+    <meta property="og:description" content="Up to four friends. One round raft. Only farts for power. Free in your browser, no download." />
+    <meta property="og:url" content="__SITE_URL__/" />
+    <meta property="og:image" content="__SITE_URL__/og.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Four cartoon players on an orange inflatable raft, farting their way down a canal" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Bottoms Up! Free Online Co-op Fart Raft Game" />
+    <meta name="twitter:description" content="Up to four friends. One round raft. Only farts for power. Free in your browser, no download." />
+    <meta name="twitter:image" content="__SITE_URL__/og.jpg" />
+
+    <!-- what this is, for search engines and AI tools -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "VideoGame",
+        "name": "Bottoms Up!",
+        "url": "__SITE_URL__/",
+        "image": "__SITE_URL__/og.jpg",
+        "description": "A free co-op physics racing game in the browser. One to four friends share one round inflatable raft and steer it with nothing but farts.",
+        "genre": ["Party game", "Racing", "Physics"],
+        "gamePlatform": "Web browser",
+        "applicationCategory": "Game",
+        "operatingSystem": "Any",
+        "playMode": ["MultiPlayer", "CoOp", "SinglePlayer"],
+        "numberOfPlayers": { "@type": "QuantitativeValue", "minValue": 1, "maxValue": 4 },
+        "isAccessibleForFree": true,
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "codeRepository": "https://github.com/namankhurpia/Bottomsup",
+        "author": { "@type": "Person", "name": "Naman Khurpia", "url": "https://github.com/namankhurpia", "sameAs": ["https://github.com/namankhurpia"] }
+      }
+    </script>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body class="mode-menu">
+    <noscript>
+      <h1>Bottoms Up!</h1>
+      <p>A free co-op physics racing game where up to four friends steer one round raft with nothing but farts. It needs JavaScript and WebGL to play. Read <a href="/about.html">about the game, how to play, and who made it</a>. Created by <a href="https://github.com/namankhurpia">Naman Khurpia</a>.</p>
+    </noscript>
     <div id="game"></div>
 
     <!-- landing: name, create / join, solo, leaderboard -->
@@ -32,6 +78,7 @@
           <button id="open-levels">Levels</button>
           <button id="open-history">Race history</button>
           <button id="solo" class="link">or practise solo</button>
+          <a class="link-a" href="/about.html">How to play</a>
         </div>
 
         <div class="board">

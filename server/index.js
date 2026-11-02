@@ -3,7 +3,8 @@
 
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
-import { extname, join, normalize, resolve } from 'node:path';
+import { extname, join, normalize, resolve, sep } from 'node:path';
+import { brotliCompressSync, constants as zlib, gzipSync } from 'node:zlib';
 import { WebSocketServer } from 'ws';
 import RAPIER from '@dimforge/rapier2d-compat';
 import { DT } from '../src/sim/sim.js';
@@ -16,8 +17,10 @@ import { createRooms } from './rooms.js';
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css',
   '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
-  '.wasm': 'application/wasm', '.wav': 'audio/wav', '.woff2': 'font/woff2',
+  '.wasm': 'application/wasm', '.wav': 'audio/wav', '.woff2': 'font/woff2', '.jpg': 'image/jpeg',
+  '.txt': 'text/plain; charset=utf-8', '.xml': 'application/xml',
 };
+const COMPRESSIBLE = new Set(['.html', '.js', '.css', '.json', '.svg', '.txt', '.xml', '.wasm']);
 
 export async function startServer({
   port = 8080,
@@ -33,6 +36,7 @@ export async function startServer({
   const db = openDb(dataDir);
   const rooms = createRooms({ RAPIER, db, roomTtlMs, seatGraceMs, log });
   const root = resolve(staticDir);
+  const compressed = new Map();
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -56,15 +60,30 @@ export async function startServer({
       }
       // static files from the Vite build, falling back to index.html
       let file = normalize(join(root, decodeURIComponent(url.pathname)));
-      if (!file.startsWith(root)) return send(res, 403, 'forbidden');
+      if (file !== root && !file.startsWith(root + sep)) return send(res, 403, 'forbidden');
       const st = await stat(file).catch(() => null);
-      if (!st || st.isDirectory()) file = join(root, 'index.html');
+      if (st && st.isDirectory()) file = join(file, 'index.html');
+      else if (!st) return send(res, 404, 'Nothing here. The game is at /'); // a real 404, so search engines don't index junk URLs
       const body = await readFile(file).catch(() => null);
       if (!body) return send(res, 404, 'Build the client first: npm run build');
-      const type = MIME[extname(file)] || 'application/octet-stream';
-      const cache = file.includes(`${root}/assets/`) ? 'public, max-age=31536000, immutable' : 'no-cache';
-      res.writeHead(200, { 'content-type': type, 'cache-control': cache });
-      res.end(body);
+      const ext = extname(file);
+      const type = MIME[ext] || 'application/octet-stream';
+      const cache = file.includes(`${root}${sep}assets${sep}`) ? 'public, max-age=31536000, immutable' : 'no-cache';
+      const headers = { 'content-type': type, 'cache-control': cache, vary: 'accept-encoding' };
+      // compress text (the game is a 4 MB script); kept in memory so it's only done once per file
+      const accepts = String(req.headers['accept-encoding'] || '');
+      const encoding = !COMPRESSIBLE.has(ext) ? null : /\bbr\b/.test(accepts) ? 'br' : /\bgzip\b/.test(accepts) ? 'gzip' : null;
+      if (encoding) {
+        const key = `${encoding}:${file}:${body.length}`;
+        if (!compressed.has(key)) {
+          compressed.set(key, encoding === 'br' ? brotliCompressSync(body, { params: { [zlib.BROTLI_PARAM_QUALITY]: 9 } }) : gzipSync(body));
+        }
+        headers['content-encoding'] = encoding;
+        res.writeHead(200, headers);
+        return res.end(req.method === 'HEAD' ? undefined : compressed.get(key));
+      }
+      res.writeHead(200, headers);
+      res.end(req.method === 'HEAD' ? undefined : body);
     } catch (err) {
       log('http error', err);
       send(res, 500, 'error');

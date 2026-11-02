@@ -448,3 +448,6 @@ body.mode-menu .about-btn { display: block; }
   body.touch .player .puff { width: 14px; font-size: 11px; }
   body.touch .start-lights { top: 190px; }
 }
+
+.nav-row .link-a { color: var(--muted); font-weight: 700; font-size: 13px; }
+noscript { display: block; position: relative; z-index: 60; padding: 16px; background: #fff; }

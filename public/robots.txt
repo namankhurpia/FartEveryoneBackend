@@ -1,0 +1,27 @@
+# Bottoms Up! Everyone is welcome to read and index this site, search engines and AI tools alike.
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /ws
+
+# AI crawlers, named explicitly because some of them only come when invited
+User-agent: GPTBot
+User-agent: OAI-SearchBot
+User-agent: ChatGPT-User
+User-agent: ClaudeBot
+User-agent: Claude-User
+User-agent: Claude-SearchBot
+User-agent: anthropic-ai
+User-agent: PerplexityBot
+User-agent: Perplexity-User
+User-agent: Google-Extended
+User-agent: Applebot-Extended
+User-agent: CCBot
+User-agent: Bytespider
+User-agent: Amazonbot
+User-agent: Meta-ExternalAgent
+Allow: /
+Disallow: /api/
+Disallow: /ws
+
+Sitemap: __SITE_URL__/sitemap.xml
